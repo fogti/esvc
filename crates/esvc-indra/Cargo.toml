@@ -1,0 +1,19 @@
+[package]
+name = "esvc-indra"
+description = "Frontend for ESVC with indradb as backend"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[dependencies]
+base32 = "0.4"
+serde_json = "1.0"
+uuid = "~0.8.2"
+yz-string-utils = "0.2"
+
+[dependencies.esvc-core]
+path = "../esvc-core"
+
+[dependencies.indradb]
+version = "3.0"
+package = "indradb-lib"

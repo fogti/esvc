@@ -1,0 +1,15 @@
+[package]
+name = "esvc-core"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0 WITH LLVM-exception"
+
+[dependencies]
+blake2 = "0.10"
+hex = "0.4"
+thiserror = "1.0"
+uuid = "0.8"
+
+[dependencies.rkyv]
+version = "0.7"
+features = ["archive_le"]
