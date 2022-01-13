@@ -50,6 +50,8 @@ impl ApplyTracker {
 struct EsvcIndra {
     // uses Arc internally
     idb: indradb::MemoryDatastore,
+
+    #[pyo3(get, set)]
     cmdreg: Py<PyList>,
 }
 
