@@ -90,7 +90,8 @@ impl EsvcIndra {
     fn run_recursively_intern<'p>(
         &'p self,
         py: Python<'p>,
-        cache: &mut BTreeMap<BTreeSet<u128>, &'p PyAny>,
+        cache_st: &mut BTreeMap<BTreeSet<u128>, &'p PyAny>,
+        cache_dp: &mut BTreeMap<u128, BTreeSet<u128>>,
         data: &mut &'p PyAny,
         trackertop: &mut BTreeSet<u128>,
         main_id: u128,
@@ -101,6 +102,11 @@ impl EsvcIndra {
 
         // heap of necessary dependencies
         let mut deps = vec![main_id];
+
+        let can_write_cache_dp = trackertop.is_empty();
+        if let Some(x) = cache_dp.get(&main_id) {
+            deps.extend(x.iter().copied());
+        }
 
         while let Some(id) = deps.pop() {
             // equivalent logic as `ApplyTracker::can_run`, but more effective
@@ -132,7 +138,7 @@ impl EsvcIndra {
                 // run the item, all dependencies are satisfied
                 use std::collections::btree_map::Entry;
                 trackertop.insert(id);
-                match cache.entry(trackertop.clone()) {
+                match cache_st.entry(trackertop.clone()) {
                     Entry::Occupied(o) => {
                         // reuse cached entry
                         *data = *o.get();
@@ -146,6 +152,14 @@ impl EsvcIndra {
                     }
                 }
             }
+        }
+
+        if can_write_cache_dp && !cache_dp.contains_key(&main_id) {
+            cache_dp.insert(main_id, {
+                let mut x = trackertop.clone();
+                x.remove(&main_id);
+                x
+            });
         }
         Ok(())
     }
@@ -203,7 +217,8 @@ impl EsvcIndra {
         use std::mem::drop;
 
         let ctx = Context(py, self.cmdreg.as_ref(py));
-        let mut cache: BTreeMap<BTreeSet<u128>, &'p PyAny> = Default::default();
+        let mut cache_st: BTreeMap<BTreeSet<u128>, &'p PyAny> = Default::default();
+        let mut cache_dp: BTreeMap<u128, BTreeSet<u128>> = Default::default();
         let mut next_deps: BTreeSet<_> = init_deps.into_iter().collect();
         let ret = PyList::empty(py);
 
@@ -228,7 +243,8 @@ impl EsvcIndra {
                     let mut a_st = init_data;
                     self.run_recursively_intern(
                         py,
-                        &mut cache,
+                        &mut cache_st,
+                        &mut cache_dp,
                         &mut a_st,
                         &mut BTreeSet::new(),
                         conc_evid,
