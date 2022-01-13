@@ -1,4 +1,3 @@
-use crate::Event;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::cmp::PartialEq;
 use std::collections::{BTreeSet, HashMap};

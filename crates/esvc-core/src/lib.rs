@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 // NOTE: avoid changing these data types, it would influence the data format
 // which means that hashes or some other relevant stuff would change.
 // We don't want that. (especially this one)
-#[derive(Debug, Archive, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Archive, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Event {
     pub name: u128,
     pub arg: Vec<u8>,
