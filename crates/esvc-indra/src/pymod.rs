@@ -20,6 +20,7 @@ fn apply_err(x: esvc_core::ApplyError) -> PyErr {
     ApplyError::new_err(x.to_string())
 }
 
+#[derive(Clone, Copy)]
 struct Context<'p>(Python<'p>, &'p PyList);
 
 impl<'p> EsvcCtx for Context<'p> {
@@ -110,25 +111,31 @@ impl EsvcIndra {
         .map_err(db_err)
     }
 
-    fn run_event<'p>(
+    fn run_events<'p>(
         &'p self,
         py: Python<'p>,
-        id: u128,
-        data: &'p PyAny,
+        ids: Vec<u128>,
+        mut data: &'p PyAny,
         tracker: Option<Py<ApplyTracker>>,
     ) -> PyResult<&'p PyAny> {
-        let evwd = crate::utils::get_event(&self.idb, id).map_err(db_err)?;
+        let ctx = Context(py, self.cmdreg.as_ref(py));
 
         if let Some(mut tracker) = tracker {
             let mut tracker = tracker.borrow_mut(py);
-            tracker.0.can_run(id, &evwd.deps).map_err(apply_err)?;
-            let ret = Context(py, self.cmdreg.as_ref(py)).execute(data, &evwd.ev)?;
-            tracker.0.register_as_ran(id);
+            for id in ids {
+                let evwd = crate::utils::get_event(&self.idb, id).map_err(db_err)?;
+                tracker.0.can_run(id, &evwd.deps).map_err(apply_err)?;
+                data = ctx.execute(data, &evwd.ev)?;
+                tracker.0.register_as_ran(id);
+            }
             // TODO: handle tags
-            Ok(ret)
         } else {
-            Context(py, self.cmdreg.as_ref(py)).execute(data, &evwd.ev)
+            for id in ids {
+                let evwd = crate::utils::get_event(&self.idb, id).map_err(db_err)?;
+                data = ctx.execute(data, &evwd.ev)?;
+            }
         }
+        Ok(data)
     }
 }
 
