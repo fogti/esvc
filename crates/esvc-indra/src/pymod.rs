@@ -3,31 +3,15 @@ use pyo3::{
     class::gc,
     create_exception,
     exceptions::PyException,
-    prelude::{pyclass, pymethods, pymodule, pyproto, wrap_pyfunction, PyModule, PyResult, Python},
-    types::{PyBytes, PyList, PyString},
+    prelude::{pyclass, pymethods, pymodule, pyproto, PyModule, PyResult, Python},
+    types::{PyBytes, PyInt, PyList, PyString},
     Py, PyAny, PyErr,
 };
 use std::collections::BTreeSet;
 
 create_exception!(esvc_indra, EsvcError, PyException);
-
-#[pyclass]
-#[derive(Clone, Copy)]
-struct Id(u128);
-
-#[pymethods]
-impl Id {
-    #[new]
-    fn new(s: &str) -> PyResult<Self> {
-        crate::utils::base32_to_id(s)
-            .map(Self)
-            .ok_or_else(|| EsvcError::new_err("unable to convert given string to event identifier"))
-    }
-
-    fn __str__(&self, py: Python<'_>) -> Py<PyString> {
-        PyString::new(py, &crate::utils::id_to_base32(self.0)).into()
-    }
-}
+create_exception!(esvc_indra, DatabaseError, EsvcError);
+create_exception!(esvc_indra, StateError, EsvcError);
 
 // uses Arc internally
 type InnerShared = indradb::MemoryDatastore;
@@ -91,14 +75,22 @@ impl gc::PyGCProtocol<'p> for HiState {
 
 #[pymethods]
 impl HiState {
-    fn run(&mut self, py: Python<'_>, ev: &Id) -> PyResult<()> {
-        let evwd = crate::utils::get_event(&self.parent, ev.0)
-            .map_err(|e| EsvcError::new_err(format!("database error: {:?}", e)))?;
+    fn run(&mut self, ev: u128) -> PyResult<()> {
+        let evwd = crate::utils::get_event(&self.parent, ev)
+            .map_err(|e| DatabaseError::new_err(format!("{:?}", e)))?;
         self.inner
-            .run(ev.0, &evwd.deps, &evwd.ev)
-            .map_err(|e| EsvcError::new_err(format!("state/run error: {:?}", e)))?;
+            .run(ev, &evwd.deps, &evwd.ev)
+            .map_err(|e| match e {
+                esvc_core::state::HiStateError::Inner(i) => i,
+                _ => StateError::new_err(format!("{:?}", e)),
+            })?;
         // TODO: call `cleanup_top`
         Ok(())
+    }
+
+    #[getter]
+    fn data<'p>(&'p self, py: Python<'p>) -> &'p PyAny {
+        self.inner.inner.data.as_ref(py)
     }
 }
 
@@ -155,21 +147,27 @@ impl EsvcIndra {
         }
     }
 
-    fn event(&self, py: Python<'_>, cmd: &Id, arg: &PyBytes, deps: Vec<Id>) -> PyResult<Id> {
-        let deps: BTreeSet<u128> = deps.into_iter().map(|Id(x)| x).collect();
+    fn event(&self, name: u128, arg: &PyBytes, deps: Vec<u128>) -> PyResult<u128> {
+        let deps: BTreeSet<u128> = deps.into_iter().collect();
 
         crate::utils::ensure_node(
             &self.inner,
             &esvc_core::EventWithDeps {
                 ev: CEvent {
-                    name: cmd.0,
+                    name,
                     arg: arg.as_bytes().to_vec(),
                 },
                 deps,
             },
         )
-        .map(Id)
-        .map_err(|e| EsvcError::new_err(format!("database error: {:?}", e)))
+        .map_err(|e| DatabaseError::new_err(format!("{:?}", e)))
+    }
+
+    fn sync(&self) -> PyResult<()> {
+        use indradb::Datastore;
+        self.inner
+            .sync()
+            .map_err(|e| DatabaseError::new_err(format!("{:?}", e)))
     }
 }
 
@@ -178,7 +176,8 @@ pub fn esvc_indra(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<State>()?;
     m.add_class::<HiState>()?;
     m.add_class::<EsvcIndra>()?;
-    m.add_class::<Id>()?;
     m.add("EsvcError", py.get_type::<EsvcError>())?;
+    m.add("DatabaseError", py.get_type::<DatabaseError>())?;
+    m.add("StateError", py.get_type::<StateError>())?;
     Ok(())
 }

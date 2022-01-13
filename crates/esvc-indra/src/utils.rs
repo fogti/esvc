@@ -4,18 +4,21 @@ use indradb::{Identifier, VertexQueryExt};
 pub fn id_to_base32(id: u128) -> String {
     base32::encode(
         base32::Alphabet::RFC4648 { padding: false },
-        &id.to_le_bytes(),
+        &id.to_be_bytes(),
     )
 }
 
 pub fn base32_to_id(b32: &str) -> Option<u128> {
     let v = base32::decode(base32::Alphabet::RFC4648 { padding: false }, b32)?;
-    if v.len() != 16 {
+    const BLKLEN: usize = 16;
+    if v.len() > BLKLEN {
         return None;
     }
-    let mut d16 = [0u8; 16];
-    d16.copy_from_slice(&v[..]);
-    Some(u128::from_le_bytes(d16))
+    let mut d16 = [0u8; BLKLEN];
+    if !v.is_empty() {
+        d16[BLKLEN - v.len()..].copy_from_slice(&v[..]);
+    }
+    Some(u128::from_be_bytes(d16))
 }
 
 pub fn ensure_node(
@@ -94,6 +97,7 @@ pub fn ensure_node(
     Ok(id.as_u128())
 }
 
+#[allow(unused)]
 pub fn replace_node(
     ds: &dyn indradb::Datastore,
     old: u128,
