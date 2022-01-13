@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 
 /// state glue, defines all necessary interactions with state and runners,
 /// which execute the events; not async because this is mostly CPU-bound
-pub trait State: Clone + Default + PartialEq {
+pub trait State: Clone + PartialEq {
     type Error: std::error::Error;
 
     /// execute an event, recording its results
