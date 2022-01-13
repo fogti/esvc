@@ -1,6 +1,7 @@
 use esvc_core::{to_bytes, uuid_from_hash, EventWithDeps};
 use indradb::{Identifier, VertexQueryExt};
 
+#[pyo3::pyfunction]
 pub fn id_to_base32(id: u128) -> String {
     base32::encode(
         base32::Alphabet::RFC4648 { padding: false },
