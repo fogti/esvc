@@ -194,33 +194,31 @@ impl Engine {
         };
         run_event_bare(&self.wte, cmd, &ev.arg[..], dat).map(Some)
     }
+}
 
-    pub fn make_cache(&mut self, init_data: Vec<u8>) -> WorkCache<'_> {
+#[derive(Clone, Default)]
+pub struct WorkCache(pub BTreeMap<BTreeSet<Hash>, Vec<u8>>);
+
+impl WorkCache {
+    pub fn new(init_data: Vec<u8>) -> Self {
         let mut sts = BTreeMap::new();
         sts.insert(BTreeSet::new(), init_data);
-        WorkCache { parent: self, sts }
+        Self(sts)
     }
-}
 
-pub struct WorkCache<'a> {
-    parent: &'a mut Engine,
-    pub sts: BTreeMap<BTreeSet<Hash>, Vec<u8>>,
-}
-
-impl WorkCache<'_> {
+    /// this returns an error if `tt` is not present in `sts`.
     pub fn run_recursively(
         &mut self,
+        parent: &Engine,
+        mut tt: BTreeSet<Hash>,
         main_evid: Hash,
         include_top: bool,
     ) -> anyhow::Result<(&[u8], BTreeSet<Hash>)> {
-        // set of already applied dependencies
-        let mut tt = BTreeSet::new();
-
         // heap of necessary dependencies
         let mut deps = vec![main_evid];
 
         let mut data = self
-            .sts
+            .0
             .get(&Default::default())
             .with_context(|| anyhow_!("unable to find initial dataset"))?
             .clone();
@@ -233,8 +231,7 @@ impl WorkCache<'_> {
                 anyhow::bail!("dependency circuit @ {}", main_evid);
             }
 
-            let evwd = self
-                .parent
+            let evwd = parent
                 .g
                 .events
                 .get(&evid)
@@ -254,7 +251,7 @@ impl WorkCache<'_> {
                 // run the item, all dependencies are satisfied
                 use std::collections::btree_map::Entry;
                 // TODO: check if `data...clone()` is a bottleneck.
-                match self.sts.entry({
+                match self.0.entry({
                     let mut tmp = tt.clone();
                     tmp.insert(evid);
                     tmp
@@ -265,10 +262,10 @@ impl WorkCache<'_> {
                     }
                     Entry::Vacant(v) => {
                         // create cache entry
-                        let cmd = self.parent.get_cmd_module(evwd.cmd).ok_or_else(|| {
+                        let cmd = parent.get_cmd_module(evwd.cmd).ok_or_else(|| {
                             anyhow_!("unable to lookup event command for {}", evid)
                         })?;
-                        data = run_event_bare(&self.parent.wte, cmd, &evwd.arg[..], &data[..])?;
+                        data = run_event_bare(&parent.wte, cmd, &evwd.arg[..], &data[..])?;
                         v.insert(data.clone());
                     }
                 }
@@ -276,25 +273,25 @@ impl WorkCache<'_> {
             }
         }
 
-        let res = self.sts.get(&tt).unwrap();
+        let res = self.0.get(&tt).unwrap();
         Ok((res, tt))
     }
 
     /// NOTE: this ignores the contents of `evs.[].deps`
     pub fn shelve_events(
         &mut self,
+        parent: &mut Engine,
         seed_deps: BTreeSet<Hash>,
         evs: Vec<Event>,
     ) -> anyhow::Result<Vec<Hash>> {
-        if !self.sts.contains_key(&Default::default()) {
+        if !self.0.contains_key(&Default::default()) {
             anyhow::bail!("unable to find initial dataset");
         }
         let mut ret = Vec::new();
         let mut next_deps = seed_deps;
 
         for ev in evs {
-            let cur_cmd = self
-                .parent
+            let cur_cmd = parent
                 .get_cmd_module(ev.cmd)
                 .ok_or_else(|| anyhow_!("unable to lookup event command for {:?}", ev))?
                 .clone();
@@ -314,13 +311,15 @@ impl WorkCache<'_> {
                         continue;
                     }
                     // calculate base state of conc excluding conc event itself
-                    let base_deps = self.run_recursively(conc_evid, false)?.1;
-                    let base_st = self.sts.get(&base_deps).unwrap();
-                    let conc_ev = self.parent.g.events.get(&conc_evid).unwrap();
-                    let conc_cmd = self.parent.get_cmd_module(ev.cmd).ok_or_else(|| {
+                    let base_deps = self
+                        .run_recursively(parent, BTreeSet::new(), conc_evid, false)?
+                        .1;
+                    let base_st = self.0.get(&base_deps).unwrap();
+                    let conc_ev = parent.g.events.get(&conc_evid).unwrap();
+                    let conc_cmd = parent.get_cmd_module(ev.cmd).ok_or_else(|| {
                         anyhow_!("unable to lookup event command for {}", conc_evid)
                     })?;
-                    let wte = &self.parent.wte;
+                    let wte = &parent.wte;
                     let (a, b) = rayon::join(
                         || {
                             run_event_bare(wte, conc_cmd, &conc_ev.arg[..], base_st).and_then(
@@ -361,7 +360,7 @@ impl WorkCache<'_> {
             next_deps.retain(|i| !ev.deps.contains(i));
 
             // register event
-            let (collinfo, evhash) = self.parent.g.ensure_event(ev);
+            let (collinfo, evhash) = parent.g.ensure_event(ev);
             if let Some(ev) = collinfo {
                 anyhow::bail!(
                     "hash collision @ {} detected while trying to insert {:?}",
@@ -375,5 +374,60 @@ impl WorkCache<'_> {
         }
 
         Ok(ret)
+    }
+
+    pub fn check_if_mergable(
+        &mut self,
+        parent: &Engine,
+        sts: BTreeSet<Hash>,
+    ) -> anyhow::Result<Option<Self>> {
+        // we run this recursively, which is a bit unfortunate,
+        // but we get the benefit that we can share the cache...
+        let bases = sts
+            .iter()
+            .map(|&h| {
+                self.run_recursively(parent, BTreeSet::new(), h, true)
+                    .map(|r| (h, r.1))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+
+        // calculate 2d matrix
+        let ret = bases
+            .iter()
+            .enumerate()
+            .flat_map(|(ni, (_, i))| {
+                sts.iter()
+                    .enumerate()
+                    .filter(move |(nj, _)| ni != *nj)
+                    .map(|(_, &j)| (i.clone(), j))
+            })
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            // source: https://sts10.github.io/2019/06/06/is-all-equal-function.html
+            .try_fold(|| (true, None), {
+                |acc: (bool, Option<_>), (i, j)| {
+                    if !acc.0 {
+                        return Ok((false, None));
+                    }
+                    let mut this = self.clone();
+                    this.run_recursively(parent, i, j, true)?;
+                    let elem = this.0;
+                    Ok(if acc.1.map(|prev| prev == elem).unwrap_or(true) {
+                        (true, Some(elem))
+                    } else {
+                        (false, None)
+                    })
+                }
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
+            .flat_map(|(uacc, x)| x.map(|y| (uacc, y)))
+            .fold((true, None), {
+                |acc, (uacc, elem)| {
+                    let is_mrgb = uacc && acc.0 && acc.1.map(|prev| prev == elem).unwrap_or(true);
+                    (is_mrgb, if is_mrgb { Some(elem) } else { None })
+                }
+            });
+        Ok(ret.1.map(Self))
     }
 }
