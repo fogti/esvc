@@ -1,0 +1,5 @@
+[workspace]
+members = ["example-*"]
+
+[profile.release]
+opt-level = "s"

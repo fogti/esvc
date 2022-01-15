@@ -1,0 +1,9 @@
+[package]
+name = "example-sear"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[dependencies.esvc-core]
+path = "../esvc-core"

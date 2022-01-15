@@ -52,7 +52,7 @@ impl Graph {
             if errs {
                 return None;
             }
-            if orig_len != st.len() {
+            if orig_len == st.len() {
                 break;
             }
         }
@@ -163,6 +163,11 @@ impl Engine {
         })
     }
 
+    #[inline]
+    pub fn graph(&self) -> &Graph {
+        &self.g
+    }
+
     pub fn with_graph(&self, g: Graph) -> anyhow::Result<Self> {
         let cmds = g
             .cmds
@@ -174,6 +179,15 @@ impl Engine {
             g,
             cmds,
         })
+    }
+
+    pub fn add_command(&mut self, wasm: Vec<u8>) -> anyhow::Result<u32> {
+        assert_eq!(self.g.cmds.len(), self.cmds.len());
+        let id: u32 = self.g.cmds.len().try_into()?;
+        let comp = wasmtime::Module::new(&self.wte, &wasm[..])?;
+        self.g.cmds.push(wasm);
+        self.cmds.push(comp);
+        Ok(id)
     }
 
     fn get_cmd_module(&self, cmd: u32) -> Option<&wasmtime::Module> {
@@ -199,6 +213,13 @@ impl Engine {
 #[derive(Clone, Default)]
 pub struct WorkCache(pub BTreeMap<BTreeSet<Hash>, Vec<u8>>);
 
+pub fn print_deps<W: std::io::Write>(w: &mut W, pfx: &str, deps: &BTreeSet<Hash>) -> std::io::Result<()> {
+    for i in deps {
+        writeln!(w, "{}{}", pfx, i)?;
+    }
+    Ok(())
+}
+
 impl WorkCache {
     pub fn new(init_data: Vec<u8>) -> Self {
         let mut sts = BTreeMap::new();
@@ -219,7 +240,7 @@ impl WorkCache {
 
         let mut data = self
             .0
-            .get(&Default::default())
+            .get(&tt)
             .with_context(|| anyhow_!("unable to find initial dataset"))?
             .clone();
 
@@ -334,12 +355,28 @@ impl WorkCache {
                             )
                         },
                     );
-                    if a? == b? {
+                    let (a, b) = (a?, b?);
+                    // DEBUG
+                    {
+                        use std::str::from_utf8;
+                        eprintln!(
+                            "conc: {}\nprev: {}\nnext: {}\n{}\n{}\n...",
+                            conc_evid,
+                            from_utf8(&conc_ev.arg[..]).unwrap(),
+                            from_utf8(&ev.arg[..]).unwrap(),
+                            from_utf8(&a[..]).unwrap(),
+                            from_utf8(&b[..]).unwrap()
+                        );
+                    }
+                    if a == b {
                         // independent -> move backward
+                        print_deps(&mut std::io::stderr(), "mnd++ ", &conc_ev.deps)?;
                         my_next_deps.extend(conc_ev.deps.iter().copied());
                     } else {
                         // not independent -> move forward
+                        print_deps(&mut std::io::stderr(), "deny- ", &conc_ev.deps)?;
                         cur_deps.extend(conc_ev.deps.iter().map(|&dep| (dep, DepSt::Deny)));
+                        eprintln!(":use: {}", conc_evid);
                         cur_deps.insert(conc_evid, DepSt::Use);
                     }
                 }

@@ -349,6 +349,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-sear"
+version = "0.1.0"
+dependencies = [
+ "esvc-core",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

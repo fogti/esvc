@@ -1,8 +1,12 @@
-.DS_Store
 .#*
+bin/
+Cargo.lock
+.DS_Store
+flamegraph.svg
+perf.data*
+pkg/
 result
 result-*
-/target
-perf.data*
-flamegraph.svg
-
+*.rs.bk
+target
+wasm-pack.log
