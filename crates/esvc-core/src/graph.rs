@@ -15,7 +15,7 @@ pub struct Event {
     pub deps: BTreeSet<Hash>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Graph {
     pub events: BTreeMap<Hash, Event>,
 
@@ -84,6 +84,7 @@ impl Graph {
     }
 }
 
+#[derive(Clone)]
 pub struct Engine {
     wte: wasmtime::Engine,
     g: Graph,
