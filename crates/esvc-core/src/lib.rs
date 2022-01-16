@@ -1,4 +1,6 @@
 pub use bincode;
+
+#[doc(no_inline)]
 pub use esvc_traits::*;
 
 mod hash;
