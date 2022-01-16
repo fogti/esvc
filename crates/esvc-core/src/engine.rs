@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone)]
 pub struct WasmEngine {
     wte: wasmtime::Engine,
-    pub g: Graph,
     cmds: Vec<wasmtime::Module>,
 }
 
@@ -78,7 +77,6 @@ impl WasmEngine {
         let wtc = wasmtime::Config::default();
         Ok(Self {
             wte: wasmtime::Engine::new(&wtc)?,
-            g: Default::default(),
             cmds: Vec::new(),
         })
     }
@@ -105,20 +103,6 @@ impl WasmEngine {
         let cmd: usize = cmd.try_into().ok()?;
         self.cmds.get(cmd)
     }
-
-    /// execute an event of a given data `dat`, ignoring all dependencies of it.
-    /// returns `Err` if execution failed, and `Ok(None)` if lookup of the event failed
-    pub fn run_event_igndeps(&self, dat: &[u8], evid: &Hash) -> anyhow::Result<Option<Vec<u8>>> {
-        let ev = match self.g.events.get(evid) {
-            Some(x) => x,
-            None => return Ok(None),
-        };
-        let cmd = match self.get_cmd_module(ev.cmd) {
-            Some(x) => x,
-            None => return Ok(None),
-        };
-        run_event_bare(&self.wte, cmd, &ev.arg[..], dat).map(Some)
-    }
 }
 
 #[derive(Clone, Default)]
@@ -134,7 +118,8 @@ impl WorkCache {
     /// this returns an error if `tt` is not present in `sts`.
     pub fn run_recursively(
         &mut self,
-        parent: &WasmEngine,
+        graph: &Graph,
+        engine: &WasmEngine,
         mut tt: BTreeSet<Hash>,
         main_evid: Hash,
         incl: IncludeSpec,
@@ -156,8 +141,7 @@ impl WorkCache {
                 anyhow::bail!("dependency circuit @ {}", main_evid);
             }
 
-            let evwd = parent
-                .g
+            let evwd = graph
                 .events
                 .get(&evid)
                 .ok_or_else(|| anyhow_!("unable to retrieve dependency {}", evid))?;
@@ -187,10 +171,10 @@ impl WorkCache {
                     }
                     Entry::Vacant(v) => {
                         // create cache entry
-                        let cmd = parent.get_cmd_module(evwd.cmd).ok_or_else(|| {
+                        let cmd = engine.get_cmd_module(evwd.cmd).ok_or_else(|| {
                             anyhow_!("unable to lookup event command for {}", evid)
                         })?;
-                        data = run_event_bare(&parent.wte, cmd, &evwd.arg[..], &data[..])?;
+                        data = run_event_bare(&engine.wte, cmd, &evwd.arg[..], &data[..])?;
                         v.insert(data.clone());
                     }
                 }
@@ -204,13 +188,14 @@ impl WorkCache {
 
     pub fn run_foreach_recursively(
         &mut self,
-        parent: &WasmEngine,
+        graph: &Graph,
+        engine: &WasmEngine,
         evids: BTreeMap<Hash, IncludeSpec>,
     ) -> anyhow::Result<(&[u8], BTreeSet<Hash>)> {
         let tt = evids
             .into_iter()
             .try_fold(BTreeSet::new(), |tt, (i, idspec)| {
-                self.run_recursively(parent, tt, i, idspec)
+                self.run_recursively(graph, engine, tt, i, idspec)
                     .map(|(_, new_tt)| new_tt)
             })?;
         let res = self.0.get(&tt).unwrap();
@@ -220,11 +205,12 @@ impl WorkCache {
     /// NOTE: this ignores the contents of `ev.deps`
     pub fn shelve_event(
         &mut self,
-        parent: &mut WasmEngine,
+        graph: &mut Graph,
+        engine: &mut WasmEngine,
         mut seed_deps: BTreeSet<Hash>,
         ev: Event,
     ) -> anyhow::Result<Option<Hash>> {
-        let cur_cmd = parent
+        let cur_cmd = engine
             .get_cmd_module(ev.cmd)
             .ok_or_else(|| anyhow_!("unable to lookup event command for {:?}", ev))?
             .clone();
@@ -241,7 +227,8 @@ impl WorkCache {
             let mut new_seed_deps = BTreeSet::new();
             // calculate cur state
             let (base_st, _) = self.run_foreach_recursively(
-                parent,
+                graph,
+                engine,
                 seed_deps
                     .iter()
                     .chain(
@@ -254,7 +241,7 @@ impl WorkCache {
                     .map(|&i| (i, IncludeSpec::IncludeAll))
                     .collect(),
             )?;
-            let cur_st = run_event_bare(&parent.wte, &cur_cmd, &ev.arg[..], base_st)?;
+            let cur_st = run_event_bare(&engine.wte, &cur_cmd, &ev.arg[..], base_st)?;
             if cur_deps.is_empty() && base_st == &cur_st[..] {
                 // this is a no-op event, we can't handle it anyways.
                 return Ok(None);
@@ -266,7 +253,8 @@ impl WorkCache {
                 }
                 // calculate base state = cur - conc
                 let (base_st, _) = self.run_foreach_recursively(
-                    parent,
+                    graph,
+                    engine,
                     seed_deps
                         .iter()
                         .chain(
@@ -287,11 +275,11 @@ impl WorkCache {
                         })
                         .collect(),
                 )?;
-                let conc_ev = parent.g.events.get(&conc_evid).unwrap();
-                let conc_cmd = parent
+                let conc_ev = graph.events.get(&conc_evid).unwrap();
+                let conc_cmd = engine
                     .get_cmd_module(conc_ev.cmd)
                     .ok_or_else(|| anyhow_!("unable to lookup event command for {}", conc_evid))?;
-                let wte = &parent.wte;
+                let wte = &engine.wte;
                 let is_indep = if cur_st == base_st {
                     // this is a NOP, needs to be skipped to avoid invalid
                     // reorderings later
@@ -330,7 +318,7 @@ impl WorkCache {
         };
 
         // register event
-        let (collinfo, evhash) = parent.g.ensure_event(ev);
+        let (collinfo, evhash) = graph.ensure_event(ev);
         if let Some(ev) = collinfo {
             anyhow::bail!(
                 "hash collision @ {} detected while trying to insert {:?}",
@@ -344,7 +332,8 @@ impl WorkCache {
 
     pub fn check_if_mergable(
         &mut self,
-        parent: &WasmEngine,
+        graph: &Graph,
+        engine: &WasmEngine,
         sts: BTreeSet<Hash>,
     ) -> anyhow::Result<Option<Self>> {
         // we run this recursively (and non-parallel), which is a bit unfortunate,
@@ -352,7 +341,7 @@ impl WorkCache {
         let bases = sts
             .iter()
             .map(|&h| {
-                self.run_recursively(parent, BTreeSet::new(), h, IncludeSpec::IncludeAll)
+                self.run_recursively(graph, engine, BTreeSet::new(), h, IncludeSpec::IncludeAll)
                     .map(|r| (h, r.1))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
@@ -376,7 +365,7 @@ impl WorkCache {
                         return Ok((false, None));
                     }
                     let mut this = self.clone();
-                    this.run_recursively(parent, i, j, IncludeSpec::IncludeAll)?;
+                    this.run_recursively(graph, engine, i, j, IncludeSpec::IncludeAll)?;
                     let elem = this.0;
                     Ok(if acc.1.map(|prev| prev == elem).unwrap_or(true) {
                         (true, Some(elem))

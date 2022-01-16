@@ -75,11 +75,12 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
     });
 
     let mut e: esvc_core::WasmEngine = (*E).clone();
+    let mut g = esvc_core::Graph::default();
 
     let mut xs = BTreeSet::new();
     for i in sears {
         if let Some(h) = w
-            .shelve_event(&mut e, xs.clone(), i.into())
+            .shelve_event(&mut g, &mut e, xs.clone(), i.into())
             .expect("unable to shelve event")
         {
             xs.insert(h);
@@ -87,7 +88,7 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
     }
 
     let minx: BTreeSet<_> =
-        e.g.fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
+        g.fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
             .unwrap()
             .into_iter()
             .map(|x| x.0)
@@ -98,7 +99,7 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
         .collect();
 
-    let (res, tt) = w.run_foreach_recursively(&e, evs.clone()).unwrap();
+    let (res, tt) = w.run_foreach_recursively(&g, &e, evs.clone()).unwrap();
     assert_eq!(xs, tt);
     let got = from_utf8(res).unwrap();
     if got != &*expected_result {
@@ -106,7 +107,7 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         eprintln!("exp: {:?}", expected_result);
 
         println!(":: e.graph.events[] ::");
-        for (h, ev) in &e.g.events {
+        for (h, ev) in &g.events {
             println!("{} {}", h, from_utf8(&ev.arg[..]).unwrap());
             esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
             println!();
@@ -116,7 +117,7 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         esvc_core::print_deps(
             &mut std::io::stdout(),
             ">> ",
-            e.g.debug_exec_order(evs).unwrap().into_iter(),
+            g.debug_exec_order(evs).unwrap().into_iter(),
         )
         .unwrap();
 

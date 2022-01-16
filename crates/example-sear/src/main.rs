@@ -14,6 +14,7 @@ fn sev(search: &str, replacement: &str) -> esvc_core::Event {
 }
 
 fn main() {
+    let mut g = esvc_core::Graph::default();
     let mut e = esvc_core::WasmEngine::new().expect("unable to initialize engine");
     e.add_commands(Some(
         std::fs::read("../../../wasm-crates/example-sear/pkg/example_sear_bg.wasm")
@@ -37,7 +38,7 @@ fn main() {
         sev("p", "np"),
     ] {
         if let Some(h) = w
-            .shelve_event(&mut e, xs.clone(), i)
+            .shelve_event(&mut g, &mut e, xs.clone(), i)
             .expect("unable to shelve event")
         {
             xs.insert(h);
@@ -61,19 +62,19 @@ fn main() {
     println!();
 
     println!(":: e.graph.events[] ::");
-    for (h, ev) in &e.g.events {
+    for (h, ev) in &g.events {
         println!("{} {}", h, from_utf8(&ev.arg[..]).unwrap());
         esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
         println!();
     }
 
     println!(":: minx ::");
-    let minx: BTreeSet<_> =
-        e.g.fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
-            .unwrap()
-            .into_iter()
-            .map(|x| x.0)
-            .collect();
+    let minx: BTreeSet<_> = g
+        .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
+        .unwrap()
+        .into_iter()
+        .map(|x| x.0)
+        .collect();
     esvc_core::print_deps(&mut std::io::stdout(), "", minx.iter().copied()).unwrap();
     println!();
 
@@ -81,6 +82,7 @@ fn main() {
 
     let (res, tt) = w
         .run_foreach_recursively(
+            &g,
             &e,
             minx.iter()
                 .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
