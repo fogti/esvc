@@ -25,21 +25,22 @@ fn main() {
 
     println!(":: shelve events ::");
 
-    let x = w
-        .shelve_events(
-            &mut e,
-            Default::default(),
-            vec![
-                sev("Hi", "Hello UwU"),
-                sev("UwU", "World"),
-                sev("what", "wow"),
-                sev("s up", "sup"),
-                sev("??", "!"),
-                sev("sup!", "soap?"),
-                sev("p", "np"),
-            ],
-        )
-        .expect("unable to shelve events");
+    let mut xs = BTreeSet::new();
+
+    for i in [
+        sev("Hi", "Hello UwU"),
+        sev("UwU", "World"),
+        sev("what", "wow"),
+        sev("s up", "sup"),
+        sev("??", "!"),
+        sev("sup!", "soap?"),
+        sev("p", "np"),
+    ] {
+        xs.insert(
+            w.shelve_event(&mut e, xs.clone(), i)
+                .expect("unable to shelve event"),
+        );
+    }
 
     println!(
         "expect result: {}",
@@ -54,7 +55,7 @@ fn main() {
     );
 
     println!(":: x ::");
-    for &i in &x {
+    for &i in &xs {
         println!("{}", i);
     }
     println!();
@@ -71,7 +72,7 @@ fn main() {
     println!(":: minx ::");
     let minx: BTreeSet<_> = e
         .graph()
-        .fold_state(x.iter().map(|&y| (y, false)).collect(), false)
+        .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
         .unwrap()
         .into_iter()
         .map(|x| x.0)
@@ -81,16 +82,16 @@ fn main() {
     }
     println!();
 
-    let x: BTreeSet<_> = x.into_iter().collect();
-
     println!(":: applied ::");
 
-    let mut tt = Default::default();
-    for i in &minx {
-        let (res, tt2) = w.run_recursively(&e, tt, *i, true).unwrap();
-        tt = tt2;
-        println!(">> {}", from_utf8(res).unwrap());
-    }
-    assert_eq!(x, tt);
-    println!("{}", from_utf8(&w.0[&x]).unwrap());
+    let (res, tt) = w
+        .run_foreach_recursively(
+            &e,
+            minx.iter()
+                .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
+                .collect(),
+        )
+        .unwrap();
+    assert_eq!(xs, tt);
+    println!("{}", from_utf8(res).unwrap());
 }

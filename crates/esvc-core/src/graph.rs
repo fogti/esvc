@@ -225,6 +225,12 @@ pub fn print_deps<W: std::io::Write>(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum IncludeSpec {
+    IncludeAll,
+    IncludeOnlyDeps,
+}
+
 impl WorkCache {
     pub fn new(init_data: Vec<u8>) -> Self {
         let mut sts = BTreeMap::new();
@@ -238,7 +244,7 @@ impl WorkCache {
         parent: &Engine,
         mut tt: BTreeSet<Hash>,
         main_evid: Hash,
-        include_top: bool,
+        incl: IncludeSpec,
     ) -> anyhow::Result<(&[u8], BTreeSet<Hash>)> {
         // heap of necessary dependencies
         let mut deps = vec![main_evid];
@@ -269,7 +275,7 @@ impl WorkCache {
                 deps.push(x);
                 deps.extend(necessary_deps.copied());
             } else {
-                if evid == main_evid && !include_top {
+                if evid == main_evid && incl != IncludeSpec::IncludeAll {
                     // we want to omit the final dep
                     break;
                 }
@@ -303,104 +309,116 @@ impl WorkCache {
         Ok((res, tt))
     }
 
+    pub fn run_foreach_recursively(
+        &mut self,
+        parent: &Engine,
+        evids: BTreeMap<Hash, IncludeSpec>,
+    ) -> anyhow::Result<(&[u8], BTreeSet<Hash>)> {
+        let tt = evids
+            .into_iter()
+            .try_fold(BTreeSet::new(), |tt, (i, idspec)| {
+                self.run_recursively(parent, tt, i, idspec)
+                    .map(|(_, new_tt)| new_tt)
+            })?;
+        let res = self.0.get(&tt).unwrap();
+        Ok((res, tt))
+    }
+
     /// NOTE: this ignores the contents of `evs.[].deps`
-    pub fn shelve_events(
+    pub fn shelve_event(
         &mut self,
         parent: &mut Engine,
-        seed_deps: BTreeSet<Hash>,
-        evs: Vec<Event>,
-    ) -> anyhow::Result<Vec<Hash>> {
-        if !self.0.contains_key(&Default::default()) {
-            anyhow::bail!("unable to find initial dataset");
+        mut seed_deps: BTreeSet<Hash>,
+        ev: Event,
+    ) -> anyhow::Result<Hash> {
+        let cur_cmd = parent
+            .get_cmd_module(ev.cmd)
+            .ok_or_else(|| anyhow_!("unable to lookup event command for {:?}", ev))?
+            .clone();
+
+        // check `ev` for independence
+        #[derive(PartialEq)]
+        enum DepSt {
+            Use,
+            Deny,
         }
-        let mut ret = Vec::new();
-        let mut next_deps = seed_deps;
+        let mut cur_deps = BTreeMap::new();
 
-        for ev in evs {
-            let cur_cmd = parent
-                .get_cmd_module(ev.cmd)
-                .ok_or_else(|| anyhow_!("unable to lookup event command for {:?}", ev))?
-                .clone();
-
-            // check `ev` for independence
-            #[derive(PartialEq)]
-            enum DepSt {
-                Use,
-                Deny,
-            }
-            let mut cur_deps = BTreeMap::new();
-            let mut my_next_deps = next_deps.clone();
-
-            while !my_next_deps.is_empty() {
-                for conc_evid in core::mem::take(&mut my_next_deps) {
-                    if cur_deps.get(&conc_evid) == Some(&DepSt::Deny) {
-                        continue;
-                    }
-                    // calculate base state of conc excluding conc event itself
-                    let base_deps = self
-                        .run_recursively(parent, BTreeSet::new(), conc_evid, false)?
-                        .1;
-                    let base_st = self.0.get(&base_deps).unwrap();
-                    let conc_ev = parent.g.events.get(&conc_evid).unwrap();
-                    let conc_cmd = parent.get_cmd_module(ev.cmd).ok_or_else(|| {
-                        anyhow_!("unable to lookup event command for {}", conc_evid)
-                    })?;
-                    let wte = &parent.wte;
-                    let (a, b) = rayon::join(
-                        || {
-                            run_event_bare(wte, conc_cmd, &conc_ev.arg[..], base_st).and_then(
-                                |next_st| run_event_bare(wte, &cur_cmd, &ev.arg[..], &next_st[..]),
-                            )
-                        },
-                        || {
-                            run_event_bare(wte, &cur_cmd, &ev.arg[..], base_st).and_then(
-                                |next_st| {
-                                    run_event_bare(wte, conc_cmd, &conc_ev.arg[..], &next_st[..])
+        while !seed_deps.is_empty() {
+            let mut new_seed_deps = BTreeSet::new();
+            for &conc_evid in &seed_deps {
+                if cur_deps.contains_key(&conc_evid) {
+                    continue;
+                }
+                // calculate base state = cur - conc
+                let (base_st, _) = self.run_foreach_recursively(
+                    parent,
+                    seed_deps
+                        .iter()
+                        .map(|&i| {
+                            (
+                                i,
+                                if i == conc_evid {
+                                    IncludeSpec::IncludeOnlyDeps
+                                } else {
+                                    IncludeSpec::IncludeAll
                                 },
                             )
-                        },
-                    );
-                    let (a, b) = (a?, b?);
-                    if a == b {
-                        // independent -> move backward
-                        my_next_deps.extend(conc_ev.deps.iter().copied());
-                    } else {
-                        // not independent -> move forward
-                        cur_deps.extend(conc_ev.deps.iter().map(|&dep| (dep, DepSt::Deny)));
-                        cur_deps.insert(conc_evid, DepSt::Use);
-                    }
+                        })
+                        .collect(),
+                )?;
+                let conc_ev = parent.g.events.get(&conc_evid).unwrap();
+                let conc_cmd = parent
+                    .get_cmd_module(ev.cmd)
+                    .ok_or_else(|| anyhow_!("unable to lookup event command for {}", conc_evid))?;
+                let wte = &parent.wte;
+                let (a, b) = rayon::join(
+                    || {
+                        run_event_bare(wte, conc_cmd, &conc_ev.arg[..], base_st).and_then(
+                            |next_st| run_event_bare(wte, &cur_cmd, &ev.arg[..], &next_st[..]),
+                        )
+                    },
+                    || {
+                        run_event_bare(wte, &cur_cmd, &ev.arg[..], base_st).and_then(|next_st| {
+                            run_event_bare(wte, conc_cmd, &conc_ev.arg[..], &next_st[..])
+                        })
+                    },
+                );
+                let (a, b) = (a?, b?);
+                if a == b {
+                    // independent -> move backward
+                    new_seed_deps.extend(conc_ev.deps.iter().copied());
+                } else {
+                    // not independent -> move forward
+                    // make sure that we don't overwrite `deny` entries
+                    cur_deps.entry(conc_evid).or_insert(DepSt::Use);
+                    cur_deps.extend(conc_ev.deps.iter().map(|&dep| (dep, DepSt::Deny)));
                 }
             }
-
-            // mangle deps
-            let ev = Event {
-                cmd: ev.cmd,
-                arg: ev.arg,
-                deps: cur_deps
-                    .into_iter()
-                    .flat_map(|(dep, st)| if st == DepSt::Use { Some(dep) } else { None })
-                    .collect(),
-            };
-
-            // replace the dependencies of this event with this event itself
-            // (move forward)
-            next_deps.retain(|i| !ev.deps.contains(i));
-
-            // register event
-            let (collinfo, evhash) = parent.g.ensure_event(ev);
-            if let Some(ev) = collinfo {
-                anyhow::bail!(
-                    "hash collision @ {} detected while trying to insert {:?}",
-                    evhash,
-                    ev
-                );
-            }
-
-            next_deps.insert(evhash);
-            ret.push(evhash);
+            seed_deps = new_seed_deps;
         }
 
-        Ok(ret)
+        // mangle deps
+        let ev = Event {
+            cmd: ev.cmd,
+            arg: ev.arg,
+            deps: cur_deps
+                .into_iter()
+                .flat_map(|(dep, st)| if st == DepSt::Use { Some(dep) } else { None })
+                .collect(),
+        };
+
+        // register event
+        let (collinfo, evhash) = parent.g.ensure_event(ev);
+        if let Some(ev) = collinfo {
+            anyhow::bail!(
+                "hash collision @ {} detected while trying to insert {:?}",
+                evhash,
+                ev
+            );
+        }
+
+        Ok(evhash)
     }
 
     pub fn check_if_mergable(
@@ -408,12 +426,12 @@ impl WorkCache {
         parent: &Engine,
         sts: BTreeSet<Hash>,
     ) -> anyhow::Result<Option<Self>> {
-        // we run this recursively, which is a bit unfortunate,
+        // we run this recursively (and non-parallel), which is a bit unfortunate,
         // but we get the benefit that we can share the cache...
         let bases = sts
             .iter()
             .map(|&h| {
-                self.run_recursively(parent, BTreeSet::new(), h, true)
+                self.run_recursively(parent, BTreeSet::new(), h, IncludeSpec::IncludeAll)
                     .map(|r| (h, r.1))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
@@ -437,7 +455,7 @@ impl WorkCache {
                         return Ok((false, None));
                     }
                     let mut this = self.clone();
-                    this.run_recursively(parent, i, j, true)?;
+                    this.run_recursively(parent, i, j, IncludeSpec::IncludeAll)?;
                     let elem = this.0;
                     Ok(if acc.1.map(|prev| prev == elem).unwrap_or(true) {
                         (true, Some(elem))

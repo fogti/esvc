@@ -76,29 +76,30 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
 
     let mut e: esvc_core::Engine = (*E).clone();
 
-    let x = w
-        .shelve_events(
-            &mut e,
-            Default::default(),
-            sears.into_iter().map(|i| i.into()).collect(),
-        )
-        .expect("unable to shelve events");
+    let mut xs = BTreeSet::new();
+    for i in sears {
+        xs.insert(
+            w.shelve_event(&mut e, xs.clone(), i.into())
+                .expect("unable to shelve event"),
+        );
+    }
 
     let minx: BTreeSet<_> = e
         .graph()
-        .fold_state(x.iter().map(|&y| (y, false)).collect(), false)
+        .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
         .unwrap()
         .into_iter()
         .map(|x| x.0)
         .collect();
 
-    let x: BTreeSet<_> = x.into_iter().collect();
-
-    let mut tt = Default::default();
-    for i in &minx {
-        let (_, tt2) = w.run_recursively(&e, tt, *i, true).unwrap();
-        tt = tt2;
-    }
-    assert_eq!(x, tt);
-    assert_eq!(from_utf8(&w.0[&x]).unwrap(), &*expected_result);
+    let (res, tt) = w
+        .run_foreach_recursively(
+            &e,
+            minx.iter()
+                .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
+                .collect(),
+        )
+        .unwrap();
+    assert_eq!(xs, tt);
+    assert_eq!(from_utf8(res).unwrap(), &*expected_result);
 });
