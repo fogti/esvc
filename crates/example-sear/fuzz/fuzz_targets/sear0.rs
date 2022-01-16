@@ -1,18 +1,32 @@
 #![no_main]
 use arbitrary::{Arbitrary, Unstructured};
+use esvc_core::anyhow;
 use libfuzzer_sys::fuzz_target;
-use once_cell::sync::Lazy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::from_utf8;
 
-static E: Lazy<esvc_wasm::WasmEngine> = Lazy::new(|| {
-    let mut e = esvc_wasm::WasmEngine::new().expect("unable to initialize engine");
-    e.add_commands(Some(
-        include_bytes!("../../../../wasm-crates/example-sear/pkg/example_sear_bg.wasm").to_vec(),
-    ))
-    .expect("unable to insert module");
-    e
-});
+struct FuzzEngine;
+
+fn my_replace(arg: &str, dat: &str) -> String {
+    let tmp: serde_json::Value = serde_json::from_str(arg).unwrap();
+    dat.replace(tmp["search"].as_str().unwrap(), tmp["replacement"].as_str().unwrap())
+}
+
+const MY_REPLACE: fn(arg: &str, dat: &str) -> String = my_replace;
+
+impl esvc_core::Engine for FuzzEngine {
+    type Command = fn(arg: &str, dat: &str) -> String;
+    type Error = anyhow::Error;
+
+    fn run_event_bare(&self, cmd: &Self::Command, arg: &[u8], dat: &[u8]) -> anyhow::Result<Vec<u8>> {
+        Ok(cmd(from_utf8(arg)?, from_utf8(dat)?).into())
+    }
+
+    fn resolve_cmd(&self, cmd: u32) -> Option<&Self::Command> {
+        assert_eq!(cmd, 0);
+        Some(&MY_REPLACE)
+    }
+}
 
 #[derive(Clone, Debug)]
 struct NonEmptyString(String);
@@ -74,7 +88,7 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         acc.replace(&*item.search, &item.replacement)
     });
 
-    let e: esvc_wasm::WasmEngine = (*E).clone();
+    let e = FuzzEngine;
     let mut g = esvc_core::Graph::default();
 
     let mut xs = BTreeSet::new();
