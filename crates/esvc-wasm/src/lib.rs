@@ -11,12 +11,14 @@ pub struct WasmEngine {
 impl Engine for WasmEngine {
     type Command = wasmtime::Module;
     type Error = anyhow::Error;
+    type Arg = Vec<u8>;
+    type Dat = Vec<u8>;
 
     fn run_event_bare(
         &self,
         cmd: &wasmtime::Module,
-        arg: &[u8],
-        dat: &[u8],
+        arg: &Vec<u8>,
+        dat: &Vec<u8>,
     ) -> anyhow::Result<Vec<u8>> {
         let datlen: i32 = dat
             .len()

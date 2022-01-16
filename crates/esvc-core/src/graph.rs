@@ -8,9 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 // We don't want that. (especially this one)
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Event {
+pub struct Event<Arg> {
     pub cmd: u32,
-    pub arg: Vec<u8>,
+    pub arg: Arg,
     pub deps: BTreeSet<Hash>,
 }
 
@@ -20,15 +20,24 @@ pub enum IncludeSpec {
     IncludeOnlyDeps,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct Graph {
-    pub events: BTreeMap<Hash, Event>,
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Graph<Arg> {
+    pub events: BTreeMap<Hash, Event<Arg>>,
 
     /// saved combined states
     pub nstates: BTreeMap<String, BTreeSet<Hash>>,
 }
 
-impl Graph {
+impl<Arg> Default for Graph<Arg> {
+    fn default() -> Self {
+        Self {
+            events: BTreeMap::new(),
+            nstates: BTreeMap::new(),
+        }
+    }
+}
+
+impl<Arg: Serialize> Graph<Arg> {
     /// fold a state, expanding of compressing it along the dependencies.
     /// `st` entries should be initialized to `false` when creating a state from a `BTreeSet<Hash>`.
     pub fn fold_state(
@@ -63,26 +72,6 @@ impl Graph {
             st.retain(|_, is_dep| !*is_dep);
         }
         Some(st)
-    }
-
-    /// get-or-insert event, check if it matches
-    ///
-    /// @returns (Some(@arg ev) if collision else None, Hash of @arg ev)
-    pub fn ensure_event(&mut self, ev: Event) -> (Option<Event>, Hash) {
-        let serval = bincode::serialize::<Event>(&ev).unwrap();
-        let h = crate::calculate_hash(&serval[..]);
-        use std::collections::btree_map::Entry;
-        (
-            match self.events.entry(h) {
-                Entry::Occupied(o) if o.get() == &ev => None,
-                Entry::Occupied(_) => Some(ev),
-                Entry::Vacant(v) => {
-                    v.insert(ev);
-                    None
-                }
-            },
-            h,
-        )
     }
 
     /// utility function for debugging of incorrect evaluation orders
@@ -128,6 +117,28 @@ impl Graph {
             }
         }
         Ok(ret)
+    }
+}
+
+impl<Arg: esvc_traits::CommandArg> Graph<Arg> {
+    /// get-or-insert event, check if it matches
+    ///
+    /// @returns (Some(@arg ev) if collision else None, Hash of @arg ev)
+    pub fn ensure_event(&mut self, ev: Event<Arg>) -> (Option<Event<Arg>>, Hash) {
+        let serval = bincode::serialize::<Event<Arg>>(&ev).unwrap();
+        let h = crate::calculate_hash(&serval[..]);
+        use std::collections::btree_map::Entry;
+        (
+            match self.events.entry(h) {
+                Entry::Occupied(o) if o.get() == &ev => None,
+                Entry::Occupied(_) => Some(ev),
+                Entry::Vacant(v) => {
+                    v.insert(ev);
+                    None
+                }
+            },
+            h,
+        )
     }
 }
 

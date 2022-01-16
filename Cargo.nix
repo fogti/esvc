@@ -146,17 +146,10 @@ rec {
         authors = [
           "David Tolnay <dtolnay@gmail.com>"
         ];
-        dependencies = [
-          {
-            name = "backtrace";
-            packageId = "backtrace";
-            optional = true;
-          }
-        ];
         features = {
           "default" = [ "std" ];
         };
-        resolvedDefaultFeatures = [ "backtrace" "default" "std" ];
+        resolvedDefaultFeatures = [ "default" "std" ];
       };
       "autocfg" = rec {
         crateName = "autocfg";
@@ -977,7 +970,7 @@ rec {
       };
       "esvc-core" = rec {
         crateName = "esvc-core";
-        version = "0.0.0";
+        version = "0.1.0";
         edition = "2021";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/esvc-core; };
         dependencies = [
@@ -1019,21 +1012,26 @@ rec {
       };
       "esvc-traits" = rec {
         crateName = "esvc-traits";
-        version = "0.0.0";
+        version = "0.1.0";
         edition = "2021";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/esvc-traits; };
         dependencies = [
           {
             name = "anyhow";
             packageId = "anyhow";
-            features = [ "backtrace" ];
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            usesDefaultFeatures = false;
           }
         ];
 
       };
       "esvc-wasm" = rec {
         crateName = "esvc-wasm";
-        version = "0.0.0";
+        version = "0.1.0";
         edition = "2021";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/esvc-wasm; };
         dependencies = [

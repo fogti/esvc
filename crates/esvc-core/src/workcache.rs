@@ -1,36 +1,38 @@
 use crate::{Event, Graph, Hash, IncludeSpec};
 use esvc_traits::anyhow::{self as anyhow, anyhow as anyhow_, Context};
-use esvc_traits::{Engine, EngineError};
+use esvc_traits::{CommandArg, Engine, EngineError, FlowData};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Default)]
-pub struct WorkCache(pub BTreeMap<BTreeSet<Hash>, Vec<u8>>);
+pub struct WorkCache<Dat>(pub BTreeMap<BTreeSet<Hash>, Dat>);
 
-impl WorkCache {
-    pub fn new(init_data: Vec<u8>) -> Self {
+impl<Dat> WorkCache<Dat> {
+    pub fn new(init_data: Dat) -> Self {
         let mut sts = BTreeMap::new();
         sts.insert(BTreeSet::new(), init_data);
         Self(sts)
     }
+}
 
+impl<Dat: FlowData> WorkCache<Dat> {
     /// this returns an error if `tt` is not present in `sts`.
-    pub fn run_recursively<C, E: EngineError>(
+    pub fn run_recursively<Arg: CommandArg, C, E: EngineError>(
         &mut self,
-        graph: &Graph,
-        engine: &dyn Engine<Command = C, Error = E>,
+        graph: &Graph<Arg>,
+        engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
         mut tt: BTreeSet<Hash>,
         main_evid: Hash,
         incl: IncludeSpec,
-    ) -> anyhow::Result<(&[u8], BTreeSet<Hash>)> {
+    ) -> anyhow::Result<(&Dat, BTreeSet<Hash>)> {
         // heap of necessary dependencies
         let mut deps = vec![main_evid];
 
-        let mut data = self
+        let mut data: Dat = (*self
             .0
             .get(&tt)
-            .with_context(|| anyhow_!("unable to find initial dataset"))?
-            .clone();
+            .with_context(|| anyhow_!("unable to find initial dataset"))?)
+        .clone();
 
         while let Some(evid) = deps.pop() {
             if tt.contains(&evid) {
@@ -74,7 +76,7 @@ impl WorkCache {
                             anyhow_!("unable to lookup event command for {}", evid)
                         })?;
                         data = engine
-                            .run_event_bare(cmd, &evwd.arg[..], &data[..])
+                            .run_event_bare(cmd, &evwd.arg, &data)
                             .map_err(|e| e.into())?;
                         v.insert(data.clone());
                     }
@@ -87,12 +89,12 @@ impl WorkCache {
         Ok((res, tt))
     }
 
-    pub fn run_foreach_recursively<C, E: EngineError>(
+    pub fn run_foreach_recursively<Arg: CommandArg, C, E: EngineError>(
         &mut self,
-        graph: &Graph,
-        engine: &dyn Engine<Command = C, Error = E>,
+        graph: &Graph<Arg>,
+        engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
         evids: BTreeMap<Hash, IncludeSpec>,
-    ) -> anyhow::Result<(&[u8], BTreeSet<Hash>)> {
+    ) -> anyhow::Result<(&Dat, BTreeSet<Hash>)> {
         let tt = evids
             .into_iter()
             .try_fold(BTreeSet::new(), |tt, (i, idspec)| {
@@ -104,12 +106,12 @@ impl WorkCache {
     }
 
     /// NOTE: this ignores the contents of `ev.deps`
-    pub fn shelve_event<C, E: EngineError>(
+    pub fn shelve_event<Arg: CommandArg, C, E: EngineError>(
         &mut self,
-        graph: &mut Graph,
-        engine: &dyn Engine<Command = C, Error = E>,
+        graph: &mut Graph<Arg>,
+        engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
         mut seed_deps: BTreeSet<Hash>,
-        ev: Event,
+        ev: Event<Arg>,
     ) -> anyhow::Result<Option<Hash>> {
         let cur_cmd = engine
             .resolve_cmd(ev.cmd)
@@ -142,9 +144,9 @@ impl WorkCache {
                     .collect(),
             )?;
             let cur_st = engine
-                .run_event_bare(cur_cmd, &ev.arg[..], base_st)
+                .run_event_bare(cur_cmd, &ev.arg, base_st)
                 .map_err(|e| e.into())?;
-            if cur_deps.is_empty() && base_st == &cur_st[..] {
+            if cur_deps.is_empty() && base_st == &cur_st {
                 // this is a no-op event, we can't handle it anyways.
                 return Ok(None);
             }
@@ -181,7 +183,7 @@ impl WorkCache {
                 let conc_cmd = engine
                     .resolve_cmd(conc_ev.cmd)
                     .ok_or_else(|| anyhow_!("unable to lookup event command for {}", conc_evid))?;
-                let is_indep = if cur_st == base_st {
+                let is_indep = if &cur_st == base_st {
                     // this is a NOP, needs to be skipped to avoid invalid
                     // reorderings later
                     true
@@ -192,10 +194,8 @@ impl WorkCache {
                     false
                 } else {
                     engine
-                        .run_event_bare(cur_cmd, &ev.arg[..], base_st)
-                        .and_then(|next_st| {
-                            engine.run_event_bare(conc_cmd, &conc_ev.arg[..], &next_st[..])
-                        })
+                        .run_event_bare(cur_cmd, &ev.arg, base_st)
+                        .and_then(|next_st| engine.run_event_bare(conc_cmd, &conc_ev.arg, &next_st))
                         .map_err(|e| e.into())?
                         == cur_st
                 };
@@ -235,10 +235,10 @@ impl WorkCache {
         Ok(Some(evhash))
     }
 
-    pub fn check_if_mergable<C, E: EngineError>(
+    pub fn check_if_mergable<Arg: CommandArg, C, E: EngineError>(
         &mut self,
-        graph: &Graph,
-        engine: &dyn Engine<Command = C, Error = E>,
+        graph: &Graph<Arg>,
+        engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
         sts: BTreeSet<Hash>,
     ) -> anyhow::Result<Option<Self>> {
         // we run this recursively (and non-parallel), which is a bit unfortunate,

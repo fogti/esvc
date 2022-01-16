@@ -3,32 +3,26 @@ use arbitrary::{Arbitrary, Unstructured};
 use esvc_core::anyhow;
 use libfuzzer_sys::fuzz_target;
 use std::collections::{BTreeMap, BTreeSet};
-use std::str::from_utf8;
 
 struct FuzzEngine;
 
-fn my_replace(arg: &str, dat: &str) -> String {
-    let tmp: serde_json::Value = serde_json::from_str(arg).unwrap();
-    dat.replace(tmp["search"].as_str().unwrap(), tmp["replacement"].as_str().unwrap())
-}
-
-const MY_REPLACE: fn(arg: &str, dat: &str) -> String = my_replace;
-
 impl esvc_core::Engine for FuzzEngine {
-    type Command = fn(arg: &str, dat: &str) -> String;
+    type Command = ();
     type Error = anyhow::Error;
+    type Arg = SearEvent;
+    type Dat = String;
 
-    fn run_event_bare(&self, cmd: &Self::Command, arg: &[u8], dat: &[u8]) -> anyhow::Result<Vec<u8>> {
-        Ok(cmd(from_utf8(arg)?, from_utf8(dat)?).into())
+    fn run_event_bare(&self, _cmd: &(), arg: &SearEvent, dat: &String) -> anyhow::Result<String> {
+        Ok(dat.replace(&*arg.search, &arg.replacement))
     }
 
-    fn resolve_cmd(&self, cmd: u32) -> Option<&Self::Command> {
+    fn resolve_cmd(&self, cmd: u32) -> Option<&()> {
         assert_eq!(cmd, 0);
-        Some(&MY_REPLACE)
+        Some(&())
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 struct NonEmptyString(String);
 
 impl core::ops::Deref for NonEmptyString {
@@ -58,22 +52,17 @@ impl<'a> Arbitrary<'a> for NonEmptyString {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, serde::Serialize)]
 struct SearEvent {
     search: NonEmptyString,
     replacement: String,
 }
 
-impl From<SearEvent> for esvc_core::Event {
-    fn from(ev: SearEvent) -> esvc_core::Event {
+impl From<SearEvent> for esvc_core::Event<SearEvent> {
+    fn from(ev: SearEvent) -> esvc_core::Event<SearEvent> {
         esvc_core::Event {
             cmd: 0,
-            arg: serde_json::to_string(&serde_json::json!({
-                "search": *ev.search,
-                "replacement": ev.replacement,
-            }))
-            .unwrap()
-            .into(),
+            arg: ev,
             deps: Default::default(),
         }
     }
@@ -81,10 +70,10 @@ impl From<SearEvent> for esvc_core::Event {
 
 fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
     let (init_data, fisear, rsears) = data;
-    let mut w = esvc_core::WorkCache::new(init_data.as_bytes().to_vec());
+    let mut w = esvc_core::WorkCache::new(init_data.0.clone());
     let sears: Vec<_> = core::iter::once(fisear).chain(rsears.into_iter()).collect();
 
-    let expected_result = sears.iter().fold(init_data.to_string(), |acc, item| {
+    let expected_result = sears.iter().fold(init_data.0, |acc, item| {
         acc.replace(&*item.search, &item.replacement)
     });
 
@@ -101,28 +90,27 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         }
     }
 
-    let minx: BTreeSet<_> =
-        g.fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
-            .unwrap()
-            .into_iter()
-            .map(|x| x.0)
-            .collect();
+    let minx: BTreeSet<_> = g
+        .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
+        .unwrap()
+        .into_iter()
+        .map(|x| x.0)
+        .collect();
 
     let evs: BTreeMap<_, _> = minx
         .iter()
         .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
         .collect();
 
-    let (res, tt) = w.run_foreach_recursively(&g, &e, evs.clone()).unwrap();
+    let (got, tt) = w.run_foreach_recursively(&g, &e, evs.clone()).unwrap();
     assert_eq!(xs, tt);
-    let got = from_utf8(res).unwrap();
     if got != &*expected_result {
         eprintln!("got: {:?}", got);
         eprintln!("exp: {:?}", expected_result);
 
         println!(":: e.graph.events[] ::");
         for (h, ev) in &g.events {
-            println!("{} {}", h, from_utf8(&ev.arg[..]).unwrap());
+            println!("{} {:?}", h, ev.arg);
             esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
             println!();
         }

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::str::from_utf8;
 
-fn sev(search: &str, replacement: &str) -> esvc_core::Event {
+fn sev(search: &str, replacement: &str) -> esvc_core::Event<Vec<u8>> {
     esvc_core::Event {
         cmd: 0,
         arg: format!(
