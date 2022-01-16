@@ -38,7 +38,7 @@ fn main() {
         sev("p", "np"),
     ] {
         if let Some(h) = w
-            .shelve_event(&mut g, &mut e, xs.clone(), i)
+            .shelve_event(&mut g, &e, xs.clone(), i)
             .expect("unable to shelve event")
         {
             xs.insert(h);

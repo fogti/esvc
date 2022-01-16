@@ -74,13 +74,13 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         acc.replace(&*item.search, &item.replacement)
     });
 
-    let mut e: esvc_core::WasmEngine = (*E).clone();
+    let e: esvc_core::WasmEngine = (*E).clone();
     let mut g = esvc_core::Graph::default();
 
     let mut xs = BTreeSet::new();
     for i in sears {
         if let Some(h) = w
-            .shelve_event(&mut g, &mut e, xs.clone(), i.into())
+            .shelve_event(&mut g, &e, xs.clone(), i.into())
             .expect("unable to shelve event")
         {
             xs.insert(h);

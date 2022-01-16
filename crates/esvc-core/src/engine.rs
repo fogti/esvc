@@ -3,74 +3,107 @@ use anyhow::{anyhow as anyhow_, Context};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub trait EngineError: Sized + Sync + Send + Into<anyhow::Error> {}
+impl<T: Sync + Send + Into<anyhow::Error>> EngineError for T {}
+
+pub trait Engine: Sync {
+    type Command;
+    type Error: EngineError;
+
+    /// execute an event of a given data `dat`, ignoring dependencies.
+    /// returns `Err` if execution failed, and everything already lookup'ed
+    fn run_event_bare(
+        &self,
+        cmd: &Self::Command,
+        arg: &[u8],
+        dat: &[u8],
+    ) -> Result<Vec<u8>, Self::Error>;
+
+    /// lookup a command in the internal index
+    fn resolve_cmd(&self, cmd: u32) -> Option<&Self::Command>;
+}
+
 #[derive(Clone)]
 pub struct WasmEngine {
     wte: wasmtime::Engine,
     cmds: Vec<wasmtime::Module>,
 }
 
+impl Engine for WasmEngine {
+    type Command = wasmtime::Module;
+    type Error = anyhow::Error;
+
+    fn run_event_bare(
+        &self,
+        cmd: &wasmtime::Module,
+        arg: &[u8],
+        dat: &[u8],
+    ) -> anyhow::Result<Vec<u8>> {
+        let datlen: i32 = dat
+            .len()
+            .try_into()
+            .map_err(|_| anyhow_!("argument buffer overflow dat.len={}", dat.len()))?;
+        let evarglen: i32 = arg
+            .len()
+            .try_into()
+            .map_err(|_| anyhow_!("argument buffer overflow ev.arg.len={}", arg.len()))?;
+
+        // WASM stuff
+
+        let mut store = wasmtime::Store::new(&self.wte, ());
+        let instance = wasmtime::Instance::new(&mut store, cmd, &[])?;
+
+        let memory = instance
+            .get_memory(&mut store, "memory")
+            .ok_or_else(|| anyhow_!("unable to get export `memory`"))?;
+
+        let retptr = instance
+            .get_typed_func::<i32, i32, _>(&mut store, "__wbindgen_add_to_stack_pointer")?
+            .call(&mut store, -16)?;
+        let malloc = instance.get_typed_func::<i32, i32, _>(&mut store, "__wbindgen_malloc")?;
+        //let free = instance.get_typed_func::<(i32, i32), (), _>(&mut store, "__wbindgen_free")?;
+
+        // transform :: retptr:i32 -> evargptr:i32 -> evarglen:i32 -> datptr:i32 -> datlen:i32 -> ()
+        let transform =
+            instance.get_typed_func::<(i32, i32, i32, i32, i32), (), _>(&mut store, "transform")?;
+
+        let evargptr = malloc.call(&mut store, evarglen)?;
+        memory.write(&mut store, evargptr.try_into()?, arg)?;
+
+        let datptr = malloc.call(&mut store, datlen)?;
+        memory.write(&mut store, datptr.try_into()?, dat)?;
+
+        // the main transform call
+        let () = transform.call(&mut store, (retptr, evargptr, evarglen, datptr, datlen))?;
+
+        // retrieve results
+        let ret = {
+            // *retptr :: (retptr2:i32, retlen2:i32)
+            let mut retbuf = [0u8; 8];
+            memory.read(&mut store, retptr.try_into()?, &mut retbuf)?;
+            let (retp0, retp1) = retbuf.split_at(4);
+            let retptr2: usize =
+                i32::from_le_bytes(<[u8; 4]>::try_from(retp0).unwrap()).try_into()?;
+            let retlen2: usize =
+                i32::from_le_bytes(<[u8; 4]>::try_from(retp1).unwrap()).try_into()?;
+            memory
+                .data(&mut store)
+                .get(retptr2..retptr2 + retlen2)
+                .with_context(|| "return value length out of bounds".to_string())?
+                .to_vec()
+        };
+
+        Ok(ret)
+    }
+
+    fn resolve_cmd(&self, cmd: u32) -> Option<&wasmtime::Module> {
+        let cmd: usize = cmd.try_into().ok()?;
+        self.cmds.get(cmd)
+    }
+}
+
 /// execute an event of a given data `dat`, ignoring dependencies.
 /// returns `Err` if execution failed, and everything already lookup'ed
-fn run_event_bare(
-    wte: &wasmtime::Engine,
-    cmd: &wasmtime::Module,
-    arg: &[u8],
-    dat: &[u8],
-) -> anyhow::Result<Vec<u8>> {
-    let datlen: i32 = dat
-        .len()
-        .try_into()
-        .map_err(|_| anyhow_!("argument buffer overflow dat.len={}", dat.len()))?;
-    let evarglen: i32 = arg
-        .len()
-        .try_into()
-        .map_err(|_| anyhow_!("argument buffer overflow ev.arg.len={}", arg.len()))?;
-
-    // WASM stuff
-
-    let mut store = wasmtime::Store::new(wte, ());
-    let instance = wasmtime::Instance::new(&mut store, cmd, &[])?;
-
-    let memory = instance
-        .get_memory(&mut store, "memory")
-        .ok_or_else(|| anyhow_!("unable to get export `memory`"))?;
-
-    let retptr = instance
-        .get_typed_func::<i32, i32, _>(&mut store, "__wbindgen_add_to_stack_pointer")?
-        .call(&mut store, -16)?;
-    let malloc = instance.get_typed_func::<i32, i32, _>(&mut store, "__wbindgen_malloc")?;
-    //let free = instance.get_typed_func::<(i32, i32), (), _>(&mut store, "__wbindgen_free")?;
-
-    // transform :: retptr:i32 -> evargptr:i32 -> evarglen:i32 -> datptr:i32 -> datlen:i32 -> ()
-    let transform =
-        instance.get_typed_func::<(i32, i32, i32, i32, i32), (), _>(&mut store, "transform")?;
-
-    let evargptr = malloc.call(&mut store, evarglen)?;
-    memory.write(&mut store, evargptr.try_into()?, arg)?;
-
-    let datptr = malloc.call(&mut store, datlen)?;
-    memory.write(&mut store, datptr.try_into()?, dat)?;
-
-    // the main transform call
-    let () = transform.call(&mut store, (retptr, evargptr, evarglen, datptr, datlen))?;
-
-    // retrieve results
-    let ret = {
-        // *retptr :: (retptr2:i32, retlen2:i32)
-        let mut retbuf = [0u8; 8];
-        memory.read(&mut store, retptr.try_into()?, &mut retbuf)?;
-        let (retp0, retp1) = retbuf.split_at(4);
-        let retptr2: usize = i32::from_le_bytes(<[u8; 4]>::try_from(retp0).unwrap()).try_into()?;
-        let retlen2: usize = i32::from_le_bytes(<[u8; 4]>::try_from(retp1).unwrap()).try_into()?;
-        memory
-            .data(&mut store)
-            .get(retptr2..retptr2 + retlen2)
-            .with_context(|| "return value length out of bounds".to_string())?
-            .to_vec()
-    };
-
-    Ok(ret)
-}
 
 impl WasmEngine {
     pub fn new() -> anyhow::Result<Self> {
@@ -98,11 +131,6 @@ impl WasmEngine {
         );
         Ok((id, self.cmds.len() - orig_id))
     }
-
-    fn get_cmd_module(&self, cmd: u32) -> Option<&wasmtime::Module> {
-        let cmd: usize = cmd.try_into().ok()?;
-        self.cmds.get(cmd)
-    }
 }
 
 #[derive(Clone, Default)]
@@ -116,10 +144,10 @@ impl WorkCache {
     }
 
     /// this returns an error if `tt` is not present in `sts`.
-    pub fn run_recursively(
+    pub fn run_recursively<C, E: EngineError>(
         &mut self,
         graph: &Graph,
-        engine: &WasmEngine,
+        engine: &dyn Engine<Command = C, Error = E>,
         mut tt: BTreeSet<Hash>,
         main_evid: Hash,
         incl: IncludeSpec,
@@ -171,10 +199,12 @@ impl WorkCache {
                     }
                     Entry::Vacant(v) => {
                         // create cache entry
-                        let cmd = engine.get_cmd_module(evwd.cmd).ok_or_else(|| {
+                        let cmd = engine.resolve_cmd(evwd.cmd).ok_or_else(|| {
                             anyhow_!("unable to lookup event command for {}", evid)
                         })?;
-                        data = run_event_bare(&engine.wte, cmd, &evwd.arg[..], &data[..])?;
+                        data = engine
+                            .run_event_bare(cmd, &evwd.arg[..], &data[..])
+                            .map_err(|e| e.into())?;
                         v.insert(data.clone());
                     }
                 }
@@ -186,10 +216,10 @@ impl WorkCache {
         Ok((res, tt))
     }
 
-    pub fn run_foreach_recursively(
+    pub fn run_foreach_recursively<C, E: EngineError>(
         &mut self,
         graph: &Graph,
-        engine: &WasmEngine,
+        engine: &dyn Engine<Command = C, Error = E>,
         evids: BTreeMap<Hash, IncludeSpec>,
     ) -> anyhow::Result<(&[u8], BTreeSet<Hash>)> {
         let tt = evids
@@ -203,17 +233,16 @@ impl WorkCache {
     }
 
     /// NOTE: this ignores the contents of `ev.deps`
-    pub fn shelve_event(
+    pub fn shelve_event<C, E: EngineError>(
         &mut self,
         graph: &mut Graph,
-        engine: &mut WasmEngine,
+        engine: &dyn Engine<Command = C, Error = E>,
         mut seed_deps: BTreeSet<Hash>,
         ev: Event,
     ) -> anyhow::Result<Option<Hash>> {
         let cur_cmd = engine
-            .get_cmd_module(ev.cmd)
-            .ok_or_else(|| anyhow_!("unable to lookup event command for {:?}", ev))?
-            .clone();
+            .resolve_cmd(ev.cmd)
+            .ok_or_else(|| anyhow_!("unable to lookup event command for {:?}", ev))?;
 
         // check `ev` for independence
         #[derive(Clone, Copy, PartialEq)]
@@ -241,7 +270,9 @@ impl WorkCache {
                     .map(|&i| (i, IncludeSpec::IncludeAll))
                     .collect(),
             )?;
-            let cur_st = run_event_bare(&engine.wte, &cur_cmd, &ev.arg[..], base_st)?;
+            let cur_st = engine
+                .run_event_bare(cur_cmd, &ev.arg[..], base_st)
+                .map_err(|e| e.into())?;
             if cur_deps.is_empty() && base_st == &cur_st[..] {
                 // this is a no-op event, we can't handle it anyways.
                 return Ok(None);
@@ -277,9 +308,8 @@ impl WorkCache {
                 )?;
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
                 let conc_cmd = engine
-                    .get_cmd_module(conc_ev.cmd)
+                    .resolve_cmd(conc_ev.cmd)
                     .ok_or_else(|| anyhow_!("unable to lookup event command for {}", conc_evid))?;
-                let wte = &engine.wte;
                 let is_indep = if cur_st == base_st {
                     // this is a NOP, needs to be skipped to avoid invalid
                     // reorderings later
@@ -290,9 +320,13 @@ impl WorkCache {
                     // even if it was already applied (case above)
                     false
                 } else {
-                    run_event_bare(wte, &cur_cmd, &ev.arg[..], base_st).and_then(|next_st| {
-                        run_event_bare(wte, conc_cmd, &conc_ev.arg[..], &next_st[..])
-                    })? == cur_st
+                    engine
+                        .run_event_bare(cur_cmd, &ev.arg[..], base_st)
+                        .and_then(|next_st| {
+                            engine.run_event_bare(conc_cmd, &conc_ev.arg[..], &next_st[..])
+                        })
+                        .map_err(|e| e.into())?
+                        == cur_st
                 };
                 if is_indep {
                     // independent -> move backward
@@ -330,10 +364,10 @@ impl WorkCache {
         Ok(Some(evhash))
     }
 
-    pub fn check_if_mergable(
+    pub fn check_if_mergable<C, E: EngineError>(
         &mut self,
         graph: &Graph,
-        engine: &WasmEngine,
+        engine: &dyn Engine<Command = C, Error = E>,
         sts: BTreeSet<Hash>,
     ) -> anyhow::Result<Option<Self>> {
         // we run this recursively (and non-parallel), which is a bit unfortunate,
