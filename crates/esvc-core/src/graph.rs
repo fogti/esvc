@@ -1,5 +1,5 @@
 use crate::Hash;
-use anyhow::anyhow as anyhow_;
+use esvc_traits::anyhow::{self as anyhow, anyhow as anyhow_};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 

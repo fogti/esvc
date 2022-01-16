@@ -34,19 +34,7 @@ rec {
   # "public" attributes that we attempt to keep stable with new versions of crate2nix.
   #
 
-  rootCrate = rec {
-    packageId = "esvc-core";
 
-    # Use this attribute to refer to the derivation building your root crate package.
-    # You can override the features with rootCrate.build.override { features = [ "default" "feature1" ... ]; }.
-    build = internal.buildRustCrateWithFeatures {
-      inherit packageId;
-    };
-
-    # Debug support which might change between releases.
-    # File a bug if you depend on any for non-debug work!
-    debug = internal.debugCrate { inherit packageId; };
-  };
   # Refer your crate build derivation by name here.
   # You can override the features with
   # workspaceMembers."${crateName}".build.override { features = [ "default" "feature1" ... ]; }.
@@ -55,6 +43,36 @@ rec {
       packageId = "esvc-core";
       build = internal.buildRustCrateWithFeatures {
         packageId = "esvc-core";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
+    "esvc-traits" = rec {
+      packageId = "esvc-traits";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "esvc-traits";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
+    "esvc-wasm" = rec {
+      packageId = "esvc-wasm";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "esvc-wasm";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
+    "example-sear" = rec {
+      packageId = "example-sear";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "example-sear";
       };
 
       # Debug support which might change between releases.
@@ -964,11 +982,6 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/esvc-core; };
         dependencies = [
           {
-            name = "anyhow";
-            packageId = "anyhow";
-            features = [ "backtrace" ];
-          }
-          {
             name = "base64";
             packageId = "base64";
           }
@@ -979,6 +992,10 @@ rec {
           {
             name = "blake2";
             packageId = "blake2";
+          }
+          {
+            name = "esvc-traits";
+            packageId = "esvc-traits";
           }
           {
             name = "rayon";
@@ -997,15 +1014,62 @@ rec {
             name = "thiserror";
             packageId = "thiserror";
           }
+        ];
+
+      };
+      "esvc-traits" = rec {
+        crateName = "esvc-traits";
+        version = "0.0.0";
+        edition = "2021";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/esvc-traits; };
+        dependencies = [
           {
-            name = "uuid";
-            packageId = "uuid";
+            name = "anyhow";
+            packageId = "anyhow";
+            features = [ "backtrace" ];
+          }
+        ];
+
+      };
+      "esvc-wasm" = rec {
+        crateName = "esvc-wasm";
+        version = "0.0.0";
+        edition = "2021";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/esvc-wasm; };
+        dependencies = [
+          {
+            name = "esvc-traits";
+            packageId = "esvc-traits";
+          }
+          {
+            name = "rayon";
+            packageId = "rayon";
           }
           {
             name = "wasmtime";
             packageId = "wasmtime";
             usesDefaultFeatures = false;
             features = [ "cranelift" "parallel-compilation" ];
+          }
+        ];
+
+      };
+      "example-sear" = rec {
+        crateName = "example-sear";
+        version = "0.1.0";
+        edition = "2021";
+        crateBin = [
+          { name = "example-sear"; path = "src/main.rs"; }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/example-sear; };
+        dependencies = [
+          {
+            name = "esvc-core";
+            packageId = "esvc-core";
+          }
+          {
+            name = "esvc-wasm";
+            packageId = "esvc-wasm";
           }
         ];
 
@@ -2185,28 +2249,6 @@ rec {
         features = {
         };
         resolvedDefaultFeatures = [ "default" ];
-      };
-      "uuid" = rec {
-        crateName = "uuid";
-        version = "0.8.2";
-        edition = "2018";
-        sha256 = "1dy4ldcp7rnzjy56dxh7d2sgrcvn4q77y0a8r0a48946h66zjp5w";
-        authors = [
-          "Ashley Mannix<ashleymannix@live.com.au>"
-          "Christopher Armstrong"
-          "Dylan DPC<dylan.dpc@gmail.com>"
-          "Hunar Roop Kahlon<hunar.roop@gmail.com>"
-        ];
-        features = {
-          "default" = [ "std" ];
-          "guid" = [ "winapi" ];
-          "stdweb" = [ "getrandom" "getrandom/js" ];
-          "v3" = [ "md5" ];
-          "v4" = [ "getrandom" ];
-          "v5" = [ "sha1" ];
-          "wasm-bindgen" = [ "getrandom" "getrandom/js" ];
-        };
-        resolvedDefaultFeatures = [ "default" "std" ];
       };
       "version_check" = rec {
         crateName = "version_check";

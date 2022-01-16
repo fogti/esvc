@@ -1,0 +1,17 @@
+[package]
+name = "esvc-wasm"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0 WITH LLVM-exception"
+
+[dependencies]
+rayon = "1.5"
+
+[dependencies.esvc-traits]
+path = "../esvc-traits"
+version = "0.0"
+
+[dependencies.wasmtime]
+version = "0.33"
+default-features = false
+features = ["cranelift", "parallel-compilation"]

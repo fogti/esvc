@@ -20,6 +20,9 @@ features = ["derive"]
 [dependencies.esvc-core]
 path = "../../esvc-core"
 
+[dependencies.esvc-wasm]
+path = "../../esvc-wasm"
+
 # Prevent this from interfering with workspaces
 [workspace]
 members = ["."]

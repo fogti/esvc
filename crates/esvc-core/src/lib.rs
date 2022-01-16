@@ -1,4 +1,5 @@
 pub use bincode;
+pub use esvc_traits::{anyhow, Engine, EngineError};
 
 mod hash;
 pub use hash::*;
@@ -6,5 +7,5 @@ pub use hash::*;
 mod graph;
 pub use graph::*;
 
-mod engine;
-pub use engine::*;
+mod workcache;
+pub use workcache::*;

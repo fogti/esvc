@@ -1,0 +1,11 @@
+[package]
+name = "esvc-traits"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0 WITH LLVM-exception"
+
+[dependencies]
+
+[dependencies.anyhow]
+version = "1.0"
+features = ["backtrace"]
