@@ -324,7 +324,7 @@ impl WorkCache {
         Ok((res, tt))
     }
 
-    /// NOTE: this ignores the contents of `evs.[].deps`
+    /// NOTE: this ignores the contents of `ev.deps`
     pub fn shelve_event(
         &mut self,
         parent: &mut Engine,
@@ -337,7 +337,7 @@ impl WorkCache {
             .clone();
 
         // check `ev` for independence
-        #[derive(PartialEq)]
+        #[derive(Clone, Copy, PartialEq)]
         enum DepSt {
             Use,
             Deny,
@@ -346,6 +346,23 @@ impl WorkCache {
 
         while !seed_deps.is_empty() {
             let mut new_seed_deps = BTreeSet::new();
+            // calculate cur state
+            let (cur_st, _) = self.run_foreach_recursively(
+                parent,
+                seed_deps
+                    .iter()
+                    .chain(
+                        cur_deps
+                            .iter()
+                            .filter(|&(_, &s)| s == DepSt::Use)
+                            .map(|(h, _)| h),
+                    )
+                    .filter(|i| cur_deps.get(i) != Some(&DepSt::Deny))
+                    .map(|&i| (i, IncludeSpec::IncludeAll))
+                    .collect(),
+            )?;
+            let cur_st = run_event_bare(&parent.wte, &cur_cmd, &ev.arg[..], cur_st)?;
+
             for &conc_evid in &seed_deps {
                 if cur_deps.contains_key(&conc_evid) {
                     continue;
@@ -355,6 +372,12 @@ impl WorkCache {
                     parent,
                     seed_deps
                         .iter()
+                        .chain(
+                            cur_deps
+                                .iter()
+                                .filter(|&(_, s)| s == &DepSt::Use)
+                                .map(|(h, _)| h),
+                        )
                         .map(|&i| {
                             (
                                 i,
@@ -372,20 +395,11 @@ impl WorkCache {
                     .get_cmd_module(ev.cmd)
                     .ok_or_else(|| anyhow_!("unable to lookup event command for {}", conc_evid))?;
                 let wte = &parent.wte;
-                let (a, b) = rayon::join(
-                    || {
-                        run_event_bare(wte, conc_cmd, &conc_ev.arg[..], base_st).and_then(
-                            |next_st| run_event_bare(wte, &cur_cmd, &ev.arg[..], &next_st[..]),
-                        )
-                    },
-                    || {
-                        run_event_bare(wte, &cur_cmd, &ev.arg[..], base_st).and_then(|next_st| {
-                            run_event_bare(wte, conc_cmd, &conc_ev.arg[..], &next_st[..])
-                        })
-                    },
-                );
-                let (a, b) = (a?, b?);
-                if a == b {
+                let x =
+                    run_event_bare(wte, &cur_cmd, &ev.arg[..], base_st).and_then(|next_st| {
+                        run_event_bare(wte, conc_cmd, &conc_ev.arg[..], &next_st[..])
+                    })?;
+                if x == cur_st {
                     // independent -> move backward
                     new_seed_deps.extend(conc_ev.deps.iter().copied());
                 } else {
