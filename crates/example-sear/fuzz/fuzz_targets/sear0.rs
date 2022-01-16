@@ -2,7 +2,7 @@
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use once_cell::sync::Lazy;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::from_utf8;
 
 static E: Lazy<esvc_core::Engine> = Lazy::new(|| {
@@ -92,14 +92,32 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         .map(|x| x.0)
         .collect();
 
-    let (res, tt) = w
-        .run_foreach_recursively(
-            &e,
-            minx.iter()
-                .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
-                .collect(),
-        )
-        .unwrap();
+    let evs: BTreeMap<_, _> = minx
+        .iter()
+        .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
+        .collect();
+
+    let (res, tt) = w.run_foreach_recursively(&e, evs.clone()).unwrap();
     assert_eq!(xs, tt);
-    assert_eq!(from_utf8(res).unwrap(), &*expected_result);
+    let got = from_utf8(res).unwrap();
+    if got != &*expected_result {
+        eprintln!("got: {:?}", got);
+        eprintln!("exp: {:?}", expected_result);
+
+        println!(":: e.graph.events[] ::");
+        for (h, ev) in &e.graph().events {
+            println!("{} {}", h, from_utf8(&ev.arg[..]).unwrap());
+            for i in &ev.deps {
+                println!(">> {}", i);
+            }
+            println!();
+        }
+
+        println!("exec order ::");
+        for i in e.graph().debug_exec_order(evs).unwrap() {
+            println!(">> {}", i);
+        }
+
+        panic!("results mismatch");
+    }
 });

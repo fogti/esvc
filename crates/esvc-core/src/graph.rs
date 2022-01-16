@@ -82,6 +82,51 @@ impl Graph {
             h,
         )
     }
+
+    /// utility function for debugging of incorrect evaluation orders
+    pub fn debug_exec_order(
+        &self,
+        evids: BTreeMap<Hash, IncludeSpec>,
+    ) -> anyhow::Result<Vec<Hash>> {
+        let mut tt = BTreeSet::new();
+        let mut ret = Vec::new();
+        let mut deps = Vec::new();
+        for (main_evid, incl) in evids {
+            // heap of necessary dependencies
+            deps.push(main_evid);
+
+            while let Some(evid) = deps.pop() {
+                if tt.contains(&evid) {
+                    // nothing to do
+                    continue;
+                } else if evid == main_evid && !deps.is_empty() {
+                    anyhow::bail!("dependency circuit @ {}", main_evid);
+                }
+
+                let evwd = self
+                    .events
+                    .get(&evid)
+                    .ok_or_else(|| anyhow_!("unable to retrieve dependency {}", evid))?;
+                let mut necessary_deps = evwd.deps.difference(&tt);
+                if let Some(&x) = necessary_deps.next() {
+                    deps.push(evid);
+                    // TODO: check for dependency cycles
+                    deps.push(x);
+                    deps.extend(necessary_deps.copied());
+                } else {
+                    if evid == main_evid && incl != IncludeSpec::IncludeAll {
+                        // we want to omit the final dep
+                        deps.clear();
+                        break;
+                    }
+                    // run the item, all dependencies are satisfied
+                    ret.push(evid);
+                    tt.insert(evid);
+                }
+            }
+        }
+        Ok(ret)
+    }
 }
 
 #[derive(Clone)]
