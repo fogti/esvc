@@ -109,16 +109,17 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         println!(":: e.graph.events[] ::");
         for (h, ev) in &e.graph().events {
             println!("{} {}", h, from_utf8(&ev.arg[..]).unwrap());
-            for i in &ev.deps {
-                println!(">> {}", i);
-            }
+            esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
             println!();
         }
 
         println!("exec order ::");
-        for i in e.graph().debug_exec_order(evs).unwrap() {
-            println!(">> {}", i);
-        }
+        esvc_core::print_deps(
+            &mut std::io::stdout(),
+            ">> ",
+            e.graph().debug_exec_order(evs).unwrap().into_iter(),
+        )
+        .unwrap();
 
         panic!("results mismatch");
     }
