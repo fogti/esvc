@@ -214,7 +214,11 @@ impl Engine {
 #[derive(Clone, Default)]
 pub struct WorkCache(pub BTreeMap<BTreeSet<Hash>, Vec<u8>>);
 
-pub fn print_deps<W: std::io::Write>(w: &mut W, pfx: &str, deps: &BTreeSet<Hash>) -> std::io::Result<()> {
+pub fn print_deps<W: std::io::Write>(
+    w: &mut W,
+    pfx: &str,
+    deps: &BTreeSet<Hash>,
+) -> std::io::Result<()> {
     for i in deps {
         writeln!(w, "{}{}", pfx, i)?;
     }
@@ -357,27 +361,12 @@ impl WorkCache {
                         },
                     );
                     let (a, b) = (a?, b?);
-                    // DEBUG
-                    {
-                        use std::str::from_utf8;
-                        eprintln!(
-                            "conc: {}\nprev: {}\nnext: {}\n{}\n{}\n...",
-                            conc_evid,
-                            from_utf8(&conc_ev.arg[..]).unwrap(),
-                            from_utf8(&ev.arg[..]).unwrap(),
-                            from_utf8(&a[..]).unwrap(),
-                            from_utf8(&b[..]).unwrap()
-                        );
-                    }
                     if a == b {
                         // independent -> move backward
-                        print_deps(&mut std::io::stderr(), "mnd++ ", &conc_ev.deps)?;
                         my_next_deps.extend(conc_ev.deps.iter().copied());
                     } else {
                         // not independent -> move forward
-                        print_deps(&mut std::io::stderr(), "deny- ", &conc_ev.deps)?;
                         cur_deps.extend(conc_ev.deps.iter().map(|&dep| (dep, DepSt::Deny)));
-                        eprintln!(":use: {}", conc_evid);
                         cur_deps.insert(conc_evid, DepSt::Use);
                     }
                 }
