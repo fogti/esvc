@@ -1,5 +1,4 @@
-use crate::{Event, Graph, Hash, IncludeSpec};
-use anyhow::{self as anyhow, anyhow as anyhow_, Context};
+use crate::{Event, Graph, GraphError, Hash, IncludeSpec};
 use esvc_traits::{CommandArg, Engine, EngineError, FlowData};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +14,18 @@ impl<Dat> WorkCache<Dat> {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum WorkCacheError<EE> {
+    #[error("engine couldn't find command with ID {0}")]
+    CommandNotFound(u32),
+
+    #[error(transparent)]
+    Graph(#[from] GraphError),
+
+    #[error(transparent)]
+    Engine(EE),
+}
+
 impl<Dat: FlowData> WorkCache<Dat> {
     /// this returns an error if `tt` is not present in `sts`.
     pub fn run_recursively<Arg: CommandArg, C, E: EngineError>(
@@ -24,28 +35,24 @@ impl<Dat: FlowData> WorkCache<Dat> {
         mut tt: BTreeSet<Hash>,
         main_evid: Hash,
         incl: IncludeSpec,
-    ) -> anyhow::Result<(&Dat, BTreeSet<Hash>)> {
+    ) -> Result<(&Dat, BTreeSet<Hash>), WorkCacheError<E>> {
         // heap of necessary dependencies
         let mut deps = vec![main_evid];
 
-        let mut data: Dat = (*self
-            .0
-            .get(&tt)
-            .with_context(|| anyhow_!("unable to find initial dataset"))?)
-        .clone();
+        let mut data: Dat = (*self.0.get(&tt).ok_or(GraphError::DatasetNotFound)?).clone();
 
         while let Some(evid) = deps.pop() {
             if tt.contains(&evid) {
                 // nothing to do
                 continue;
             } else if evid == main_evid && !deps.is_empty() {
-                anyhow::bail!("dependency circuit @ {}", main_evid);
+                return Err(GraphError::DependencyCircuit(main_evid).into());
             }
 
             let evwd = graph
                 .events
                 .get(&evid)
-                .ok_or_else(|| anyhow_!("unable to retrieve dependency {}", evid))?;
+                .ok_or(GraphError::DependencyNotFound(evid))?;
             let mut necessary_deps = evwd.deps.difference(&tt);
             if let Some(&x) = necessary_deps.next() {
                 deps.push(evid);
@@ -72,12 +79,12 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     }
                     Entry::Vacant(v) => {
                         // create cache entry
-                        let cmd = engine.resolve_cmd(evwd.cmd).ok_or_else(|| {
-                            anyhow_!("unable to lookup event command for {}", evid)
-                        })?;
+                        let cmd = engine
+                            .resolve_cmd(evwd.cmd)
+                            .ok_or(GraphError::CommandNotFound(evwd.cmd))?;
                         data = engine
                             .run_event_bare(cmd, &evwd.arg, &data)
-                            .map_err(|e| e.into())?;
+                            .map_err(WorkCacheError::Engine)?;
                         v.insert(data.clone());
                     }
                 }
@@ -94,7 +101,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
         graph: &Graph<Arg>,
         engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
         evids: BTreeMap<Hash, IncludeSpec>,
-    ) -> anyhow::Result<(&Dat, BTreeSet<Hash>)> {
+    ) -> Result<(&Dat, BTreeSet<Hash>), WorkCacheError<E>> {
         let tt = evids
             .into_iter()
             .try_fold(BTreeSet::new(), |tt, (i, idspec)| {
@@ -112,10 +119,10 @@ impl<Dat: FlowData> WorkCache<Dat> {
         engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
         mut seed_deps: BTreeSet<Hash>,
         ev: Event<Arg>,
-    ) -> anyhow::Result<Option<Hash>> {
+    ) -> Result<Option<Hash>, WorkCacheError<E>> {
         let cur_cmd = engine
             .resolve_cmd(ev.cmd)
-            .ok_or_else(|| anyhow_!("unable to lookup event command for {:?}", ev))?;
+            .ok_or(GraphError::CommandNotFound(ev.cmd))?;
 
         // check `ev` for independence
         #[derive(Clone, Copy, PartialEq)]
@@ -145,7 +152,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
             )?;
             let cur_st = engine
                 .run_event_bare(cur_cmd, &ev.arg, base_st)
-                .map_err(|e| e.into())?;
+                .map_err(WorkCacheError::Engine)?;
             if cur_deps.is_empty() && base_st == &cur_st {
                 // this is a no-op event, we can't handle it anyways.
                 return Ok(None);
@@ -182,7 +189,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
                 let conc_cmd = engine
                     .resolve_cmd(conc_ev.cmd)
-                    .ok_or_else(|| anyhow_!("unable to lookup event command for {}", conc_evid))?;
+                    .ok_or(GraphError::CommandNotFound(conc_ev.cmd))?;
                 let is_indep = if &cur_st == base_st {
                     // this is a NOP, needs to be skipped to avoid invalid
                     // reorderings later
@@ -196,7 +203,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     engine
                         .run_event_bare(cur_cmd, &ev.arg, base_st)
                         .and_then(|next_st| engine.run_event_bare(conc_cmd, &conc_ev.arg, &next_st))
-                        .map_err(|e| e.into())?
+                        .map_err(WorkCacheError::Engine)?
                         == cur_st
                 };
                 if is_indep {
@@ -225,11 +232,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
         // register event
         let (collinfo, evhash) = graph.ensure_event(ev);
         if let Some(ev) = collinfo {
-            anyhow::bail!(
-                "hash collision @ {} detected while trying to insert {:?}",
-                evhash,
-                ev
-            );
+            return Err(GraphError::HashCollision(evhash, format!("{:?}", ev)).into());
         }
 
         Ok(Some(evhash))
@@ -240,7 +243,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
         graph: &Graph<Arg>,
         engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
         sts: BTreeSet<Hash>,
-    ) -> anyhow::Result<Option<Self>> {
+    ) -> Result<Option<Self>, WorkCacheError<E>> {
         // we run this recursively (and non-parallel), which is a bit unfortunate,
         // but we get the benefit that we can share the cache...
         let bases = sts
@@ -279,7 +282,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     })
                 }
             })
-            .collect::<anyhow::Result<Vec<_>>>()?
+            .collect::<Result<Vec<_>, WorkCacheError<E>>>()?
             .into_iter()
             .flat_map(|(uacc, x)| x.map(|y| (uacc, y)))
             .fold((true, None), {

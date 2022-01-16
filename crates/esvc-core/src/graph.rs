@@ -1,5 +1,4 @@
 use crate::Hash;
-use anyhow::{self as anyhow, anyhow as anyhow_};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,6 +34,25 @@ impl<Arg> Default for Graph<Arg> {
             nstates: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum GraphError {
+    #[error("unable to find the specified dataset")]
+    DatasetNotFound,
+
+    #[error("dependency circuit @ {0}")]
+    DependencyCircuit(Hash),
+
+    #[error("unable to retrieve dependency {0}")]
+    DependencyNotFound(Hash),
+
+    #[error("engine couldn't find command with ID {0}")]
+    CommandNotFound(u32),
+
+    // we don't want any dependency on `Arg` here
+    #[error("hash collision @ {0} detected during insertion of {}")]
+    HashCollision(Hash, String),
 }
 
 impl<Arg: Serialize> Graph<Arg> {
@@ -78,7 +96,7 @@ impl<Arg: Serialize> Graph<Arg> {
     pub fn debug_exec_order(
         &self,
         evids: BTreeMap<Hash, IncludeSpec>,
-    ) -> anyhow::Result<Vec<Hash>> {
+    ) -> Result<Vec<Hash>, GraphError> {
         let mut tt = BTreeSet::new();
         let mut ret = Vec::new();
         let mut deps = Vec::new();
@@ -91,13 +109,13 @@ impl<Arg: Serialize> Graph<Arg> {
                     // nothing to do
                     continue;
                 } else if evid == main_evid && !deps.is_empty() {
-                    anyhow::bail!("dependency circuit @ {}", main_evid);
+                    return Err(GraphError::DependencyCircuit(main_evid));
                 }
 
                 let evwd = self
                     .events
                     .get(&evid)
-                    .ok_or_else(|| anyhow_!("unable to retrieve dependency {}", evid))?;
+                    .ok_or(GraphError::DependencyNotFound(evid))?;
                 let mut necessary_deps = evwd.deps.difference(&tt);
                 if let Some(&x) = necessary_deps.next() {
                     deps.push(evid);

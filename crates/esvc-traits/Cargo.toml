@@ -8,10 +8,6 @@ repository = "https://github.com/zseri/esvc"
 
 [dependencies]
 
-[dependencies.anyhow]
-version = "1.0"
-default-features = false
-
 [dependencies.serde]
 version = "1.0"
 default-features = false

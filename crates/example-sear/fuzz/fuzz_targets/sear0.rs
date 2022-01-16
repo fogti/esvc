@@ -1,6 +1,5 @@
 #![no_main]
 use arbitrary::{Arbitrary, Unstructured};
-use esvc_core::anyhow;
 use libfuzzer_sys::fuzz_target;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,11 +7,11 @@ struct FuzzEngine;
 
 impl esvc_core::Engine for FuzzEngine {
     type Command = ();
-    type Error = anyhow::Error;
+    type Error = ();
     type Arg = SearEvent;
     type Dat = String;
 
-    fn run_event_bare(&self, _cmd: &(), arg: &SearEvent, dat: &String) -> anyhow::Result<String> {
+    fn run_event_bare(&self, _cmd: &(), arg: &SearEvent, dat: &String) -> Result<String, ()> {
         Ok(dat.replace(&*arg.search, &arg.replacement))
     }
 

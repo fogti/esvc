@@ -1,5 +1,5 @@
 pub use bincode;
-pub use esvc_traits as traits;
+pub use esvc_traits::*;
 
 mod hash;
 pub use hash::*;

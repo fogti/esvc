@@ -3,8 +3,8 @@
 
 use core::{cmp::PartialEq, fmt::Debug};
 
-pub trait EngineError: Sized + Sync + Send + Into<anyhow::Error> {}
-impl<T: Sync + Send + Into<anyhow::Error>> EngineError for T {}
+pub trait EngineError: Sized + Sync + Send + 'static {}
+impl<T: Sync + Send + 'static> EngineError for T {}
 
 pub trait CommandArg: Sized + Debug + Sync + PartialEq + serde::Serialize {}
 impl<T: Debug + Sync + PartialEq + serde::Serialize> CommandArg for T {}

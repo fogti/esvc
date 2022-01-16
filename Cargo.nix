@@ -975,10 +975,6 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/esvc-core; };
         dependencies = [
           {
-            name = "anyhow";
-            packageId = "anyhow";
-          }
-          {
             name = "base64";
             packageId = "base64";
           }
@@ -1020,11 +1016,6 @@ rec {
         edition = "2021";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/esvc-traits; };
         dependencies = [
-          {
-            name = "anyhow";
-            packageId = "anyhow";
-            usesDefaultFeatures = false;
-          }
           {
             name = "serde";
             packageId = "serde";
