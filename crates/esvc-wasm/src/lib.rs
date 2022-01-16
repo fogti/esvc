@@ -9,17 +9,19 @@ pub struct WasmEngine {
 }
 
 impl Engine for WasmEngine {
-    type Command = wasmtime::Module;
     type Error = anyhow::Error;
     type Arg = Vec<u8>;
     type Dat = Vec<u8>;
 
-    fn run_event_bare(
-        &self,
-        cmd: &wasmtime::Module,
-        arg: &Vec<u8>,
-        dat: &Vec<u8>,
-    ) -> anyhow::Result<Vec<u8>> {
+    fn run_event_bare(&self, cmd: u32, arg: &Vec<u8>, dat: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        let cmd: usize = cmd
+            .try_into()
+            .map_err(|_| anyhow_!("command ID overflow cmd={}", cmd))?;
+        let cmd = self
+            .cmds
+            .get(cmd)
+            .ok_or_else(|| anyhow_!("command {} not found", cmd))?;
+
         let datlen: i32 = dat
             .len()
             .try_into()
@@ -75,11 +77,6 @@ impl Engine for WasmEngine {
         };
 
         Ok(ret)
-    }
-
-    fn resolve_cmd(&self, cmd: u32) -> Option<&wasmtime::Module> {
-        let cmd: usize = cmd.try_into().ok()?;
-        self.cmds.get(cmd)
     }
 }
 

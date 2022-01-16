@@ -28,10 +28,10 @@ pub enum WorkCacheError<EE> {
 
 impl<Dat: FlowData> WorkCache<Dat> {
     /// this returns an error if `tt` is not present in `sts`.
-    pub fn run_recursively<Arg: CommandArg, C, E: EngineError>(
+    pub fn run_recursively<Arg: CommandArg, E: EngineError>(
         &mut self,
         graph: &Graph<Arg>,
-        engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
+        engine: &dyn Engine<Arg = Arg, Error = E, Dat = Dat>,
         mut tt: BTreeSet<Hash>,
         main_evid: Hash,
         incl: IncludeSpec,
@@ -79,11 +79,8 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     }
                     Entry::Vacant(v) => {
                         // create cache entry
-                        let cmd = engine
-                            .resolve_cmd(evwd.cmd)
-                            .ok_or(GraphError::CommandNotFound(evwd.cmd))?;
                         data = engine
-                            .run_event_bare(cmd, &evwd.arg, &data)
+                            .run_event_bare(evwd.cmd, &evwd.arg, &data)
                             .map_err(WorkCacheError::Engine)?;
                         v.insert(data.clone());
                     }
@@ -96,10 +93,10 @@ impl<Dat: FlowData> WorkCache<Dat> {
         Ok((res, tt))
     }
 
-    pub fn run_foreach_recursively<Arg: CommandArg, C, E: EngineError>(
+    pub fn run_foreach_recursively<Arg: CommandArg, E: EngineError>(
         &mut self,
         graph: &Graph<Arg>,
-        engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
+        engine: &dyn Engine<Arg = Arg, Error = E, Dat = Dat>,
         evids: BTreeMap<Hash, IncludeSpec>,
     ) -> Result<(&Dat, BTreeSet<Hash>), WorkCacheError<E>> {
         let tt = evids
@@ -113,17 +110,13 @@ impl<Dat: FlowData> WorkCache<Dat> {
     }
 
     /// NOTE: this ignores the contents of `ev.deps`
-    pub fn shelve_event<Arg: CommandArg, C, E: EngineError>(
+    pub fn shelve_event<Arg: CommandArg, E: EngineError>(
         &mut self,
         graph: &mut Graph<Arg>,
-        engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
+        engine: &dyn Engine<Arg = Arg, Error = E, Dat = Dat>,
         mut seed_deps: BTreeSet<Hash>,
         ev: Event<Arg>,
     ) -> Result<Option<Hash>, WorkCacheError<E>> {
-        let cur_cmd = engine
-            .resolve_cmd(ev.cmd)
-            .ok_or(GraphError::CommandNotFound(ev.cmd))?;
-
         // check `ev` for independence
         #[derive(Clone, Copy, PartialEq)]
         enum DepSt {
@@ -151,7 +144,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     .collect(),
             )?;
             let cur_st = engine
-                .run_event_bare(cur_cmd, &ev.arg, base_st)
+                .run_event_bare(ev.cmd, &ev.arg, base_st)
                 .map_err(WorkCacheError::Engine)?;
             if cur_deps.is_empty() && base_st == &cur_st {
                 // this is a no-op event, we can't handle it anyways.
@@ -187,9 +180,6 @@ impl<Dat: FlowData> WorkCache<Dat> {
                         .collect(),
                 )?;
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
-                let conc_cmd = engine
-                    .resolve_cmd(conc_ev.cmd)
-                    .ok_or(GraphError::CommandNotFound(conc_ev.cmd))?;
                 let is_indep = if &cur_st == base_st {
                     // this is a NOP, needs to be skipped to avoid invalid
                     // reorderings later
@@ -201,8 +191,10 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     false
                 } else {
                     engine
-                        .run_event_bare(cur_cmd, &ev.arg, base_st)
-                        .and_then(|next_st| engine.run_event_bare(conc_cmd, &conc_ev.arg, &next_st))
+                        .run_event_bare(ev.cmd, &ev.arg, base_st)
+                        .and_then(|next_st| {
+                            engine.run_event_bare(conc_ev.cmd, &conc_ev.arg, &next_st)
+                        })
                         .map_err(WorkCacheError::Engine)?
                         == cur_st
                 };
@@ -238,10 +230,10 @@ impl<Dat: FlowData> WorkCache<Dat> {
         Ok(Some(evhash))
     }
 
-    pub fn check_if_mergable<Arg: CommandArg, C, E: EngineError>(
+    pub fn check_if_mergable<Arg: CommandArg, E: EngineError>(
         &mut self,
         graph: &Graph<Arg>,
-        engine: &dyn Engine<Command = C, Error = E, Arg = Arg, Dat = Dat>,
+        engine: &dyn Engine<Arg = Arg, Error = E, Dat = Dat>,
         sts: BTreeSet<Hash>,
     ) -> Result<Option<Self>, WorkCacheError<E>> {
         // we run this recursively (and non-parallel), which is a bit unfortunate,

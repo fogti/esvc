@@ -47,9 +47,6 @@ pub enum GraphError {
     #[error("unable to retrieve dependency {0}")]
     DependencyNotFound(Hash),
 
-    #[error("engine couldn't find command with ID {0}")]
-    CommandNotFound(u32),
-
     // we don't want any dependency on `Arg` here
     #[error("hash collision @ {0} detected during insertion of {}")]
     HashCollision(Hash, String),
