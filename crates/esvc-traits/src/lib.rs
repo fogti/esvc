@@ -3,8 +3,6 @@
 
 use core::{cmp::PartialEq, fmt::Debug};
 
-pub use anyhow;
-
 pub trait EngineError: Sized + Sync + Send + Into<anyhow::Error> {}
 impl<T: Sync + Send + Into<anyhow::Error>> EngineError for T {}
 

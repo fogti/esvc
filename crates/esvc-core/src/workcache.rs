@@ -1,5 +1,5 @@
 use crate::{Event, Graph, Hash, IncludeSpec};
-use esvc_traits::anyhow::{self as anyhow, anyhow as anyhow_, Context};
+use anyhow::{self as anyhow, anyhow as anyhow_, Context};
 use esvc_traits::{CommandArg, Engine, EngineError, FlowData};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
