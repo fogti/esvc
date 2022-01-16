@@ -22,7 +22,7 @@ fn main() {
     ))
     .expect("unable to insert module");
 
-    let mut w = esvc_core::WorkCache::new("Hi, what's up??".to_string().into());
+    let mut w = esvc_core::WorkCache::new(&e, "Hi, what's up??".to_string().into());
 
     println!(":: shelve events ::");
 
@@ -38,7 +38,7 @@ fn main() {
         sev("p", "np"),
     ] {
         if let Some(h) = w
-            .shelve_event(&mut g, &e, xs.clone(), i)
+            .shelve_event(&mut g, xs.clone(), i)
             .expect("unable to shelve event")
         {
             xs.insert(h);
@@ -83,7 +83,6 @@ fn main() {
     let (res, tt) = w
         .run_foreach_recursively(
             &g,
-            &e,
             minx.iter()
                 .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
                 .collect(),

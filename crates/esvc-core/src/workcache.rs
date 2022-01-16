@@ -1,16 +1,27 @@
 use crate::{Event, Graph, GraphError, Hash, IncludeSpec};
-use esvc_traits::{CommandArg, Engine, EngineError, FlowData};
+use esvc_traits::Engine;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Default)]
-pub struct WorkCache<Dat>(pub BTreeMap<BTreeSet<Hash>, Dat>);
+// NOTE: the elements of this *must* be public, because the user needs to be
+// able to deconstruct it if they want to modify the engine
+// (e.g. to register a new command at runtime)
+pub struct WorkCache<'a, En: Engine> {
+    pub engine: &'a En,
+    pub sts: BTreeMap<BTreeSet<Hash>, <En as Engine>::Dat>,
+}
 
-impl<Dat> WorkCache<Dat> {
-    pub fn new(init_data: Dat) -> Self {
-        let mut sts = BTreeMap::new();
-        sts.insert(BTreeSet::new(), init_data);
-        Self(sts)
+impl<'a, En: Engine> core::clone::Clone for WorkCache<'a, En> {
+    fn clone(&self) -> Self {
+        Self {
+            engine: self.engine,
+            sts: self.sts.clone(),
+        }
+    }
+
+    fn clone_from(&mut self, other: &Self) {
+        self.engine = other.engine;
+        self.sts.clone_from(&other.sts);
     }
 }
 
@@ -26,20 +37,28 @@ pub enum WorkCacheError<EE> {
     Engine(EE),
 }
 
-impl<Dat: FlowData> WorkCache<Dat> {
+pub type RunResult<'a, En> =
+    Result<(&'a <En as Engine>::Dat, BTreeSet<Hash>), WorkCacheError<<En as Engine>::Error>>;
+
+impl<'a, En: Engine> WorkCache<'a, En> {
+    pub fn new(engine: &'a En, init_data: En::Dat) -> Self {
+        let mut sts = BTreeMap::new();
+        sts.insert(BTreeSet::new(), init_data);
+        Self { engine, sts }
+    }
+
     /// this returns an error if `tt` is not present in `sts`.
-    pub fn run_recursively<Arg: CommandArg, E: EngineError>(
+    pub fn run_recursively(
         &mut self,
-        graph: &Graph<Arg>,
-        engine: &dyn Engine<Arg = Arg, Error = E, Dat = Dat>,
+        graph: &Graph<En::Arg>,
         mut tt: BTreeSet<Hash>,
         main_evid: Hash,
         incl: IncludeSpec,
-    ) -> Result<(&Dat, BTreeSet<Hash>), WorkCacheError<E>> {
+    ) -> RunResult<'_, En> {
         // heap of necessary dependencies
         let mut deps = vec![main_evid];
 
-        let mut data: Dat = (*self.0.get(&tt).ok_or(GraphError::DatasetNotFound)?).clone();
+        let mut data: En::Dat = (*self.sts.get(&tt).ok_or(GraphError::DatasetNotFound)?).clone();
 
         while let Some(evid) = deps.pop() {
             if tt.contains(&evid) {
@@ -68,7 +87,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
                 // run the item, all dependencies are satisfied
                 use std::collections::btree_map::Entry;
                 // TODO: check if `data...clone()` is a bottleneck.
-                match self.0.entry({
+                match self.sts.entry({
                     let mut tmp = tt.clone();
                     tmp.insert(evid);
                     tmp
@@ -79,7 +98,8 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     }
                     Entry::Vacant(v) => {
                         // create cache entry
-                        data = engine
+                        data = self
+                            .engine
                             .run_event_bare(evwd.cmd, &evwd.arg, &data)
                             .map_err(WorkCacheError::Engine)?;
                         v.insert(data.clone());
@@ -89,34 +109,32 @@ impl<Dat: FlowData> WorkCache<Dat> {
             }
         }
 
-        let res = self.0.get(&tt).unwrap();
+        let res = self.sts.get(&tt).unwrap();
         Ok((res, tt))
     }
 
-    pub fn run_foreach_recursively<Arg: CommandArg, E: EngineError>(
+    pub fn run_foreach_recursively(
         &mut self,
-        graph: &Graph<Arg>,
-        engine: &dyn Engine<Arg = Arg, Error = E, Dat = Dat>,
+        graph: &Graph<En::Arg>,
         evids: BTreeMap<Hash, IncludeSpec>,
-    ) -> Result<(&Dat, BTreeSet<Hash>), WorkCacheError<E>> {
+    ) -> RunResult<'_, En> {
         let tt = evids
             .into_iter()
             .try_fold(BTreeSet::new(), |tt, (i, idspec)| {
-                self.run_recursively(graph, engine, tt, i, idspec)
+                self.run_recursively(graph, tt, i, idspec)
                     .map(|(_, new_tt)| new_tt)
             })?;
-        let res = self.0.get(&tt).unwrap();
+        let res = self.sts.get(&tt).unwrap();
         Ok((res, tt))
     }
 
     /// NOTE: this ignores the contents of `ev.deps`
-    pub fn shelve_event<Arg: CommandArg, E: EngineError>(
+    pub fn shelve_event(
         &mut self,
-        graph: &mut Graph<Arg>,
-        engine: &dyn Engine<Arg = Arg, Error = E, Dat = Dat>,
+        graph: &mut Graph<En::Arg>,
         mut seed_deps: BTreeSet<Hash>,
-        ev: Event<Arg>,
-    ) -> Result<Option<Hash>, WorkCacheError<E>> {
+        ev: Event<En::Arg>,
+    ) -> Result<Option<Hash>, WorkCacheError<En::Error>> {
         // check `ev` for independence
         #[derive(Clone, Copy, PartialEq)]
         enum DepSt {
@@ -124,13 +142,13 @@ impl<Dat: FlowData> WorkCache<Dat> {
             Deny,
         }
         let mut cur_deps = BTreeMap::new();
+        let engine = self.engine;
 
         while !seed_deps.is_empty() {
             let mut new_seed_deps = BTreeSet::new();
             // calculate cur state
             let (base_st, _) = self.run_foreach_recursively(
                 graph,
-                engine,
                 seed_deps
                     .iter()
                     .chain(
@@ -158,7 +176,6 @@ impl<Dat: FlowData> WorkCache<Dat> {
                 // calculate base state = cur - conc
                 let (base_st, _) = self.run_foreach_recursively(
                     graph,
-                    engine,
                     seed_deps
                         .iter()
                         .chain(
@@ -193,7 +210,8 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     engine
                         .run_event_bare(ev.cmd, &ev.arg, base_st)
                         .and_then(|next_st| {
-                            engine.run_event_bare(conc_ev.cmd, &conc_ev.arg, &next_st)
+                            self.engine
+                                .run_event_bare(conc_ev.cmd, &conc_ev.arg, &next_st)
                         })
                         .map_err(WorkCacheError::Engine)?
                         == cur_st
@@ -230,18 +248,17 @@ impl<Dat: FlowData> WorkCache<Dat> {
         Ok(Some(evhash))
     }
 
-    pub fn check_if_mergable<Arg: CommandArg, E: EngineError>(
+    pub fn check_if_mergable(
         &mut self,
-        graph: &Graph<Arg>,
-        engine: &dyn Engine<Arg = Arg, Error = E, Dat = Dat>,
+        graph: &Graph<En::Arg>,
         sts: BTreeSet<Hash>,
-    ) -> Result<Option<Self>, WorkCacheError<E>> {
+    ) -> Result<Option<Self>, WorkCacheError<En::Error>> {
         // we run this recursively (and non-parallel), which is a bit unfortunate,
         // but we get the benefit that we can share the cache...
         let bases = sts
             .iter()
             .map(|&h| {
-                self.run_recursively(graph, engine, BTreeSet::new(), h, IncludeSpec::IncludeAll)
+                self.run_recursively(graph, BTreeSet::new(), h, IncludeSpec::IncludeAll)
                     .map(|r| (h, r.1))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
@@ -265,8 +282,8 @@ impl<Dat: FlowData> WorkCache<Dat> {
                         return Ok((false, None));
                     }
                     let mut this = self.clone();
-                    this.run_recursively(graph, engine, i, j, IncludeSpec::IncludeAll)?;
-                    let elem = this.0;
+                    this.run_recursively(graph, i, j, IncludeSpec::IncludeAll)?;
+                    let elem = this.sts;
                     Ok(if acc.1.map(|prev| prev == elem).unwrap_or(true) {
                         (true, Some(elem))
                     } else {
@@ -274,7 +291,7 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     })
                 }
             })
-            .collect::<Result<Vec<_>, WorkCacheError<E>>>()?
+            .collect::<Result<Vec<_>, WorkCacheError<_>>>()?
             .into_iter()
             .flat_map(|(uacc, x)| x.map(|y| (uacc, y)))
             .fold((true, None), {
@@ -283,6 +300,9 @@ impl<Dat: FlowData> WorkCache<Dat> {
                     (is_mrgb, if is_mrgb { Some(elem) } else { None })
                 }
             });
-        Ok(ret.1.map(Self))
+        Ok(ret.1.map(|sts| Self {
+            engine: self.engine,
+            sts,
+        }))
     }
 }
