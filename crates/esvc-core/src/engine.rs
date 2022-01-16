@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone)]
-pub struct Engine {
+pub struct WasmEngine {
     wte: wasmtime::Engine,
     pub g: Graph,
     cmds: Vec<wasmtime::Module>,
@@ -73,7 +73,7 @@ fn run_event_bare(
     Ok(ret)
 }
 
-impl Engine {
+impl WasmEngine {
     pub fn new() -> anyhow::Result<Self> {
         let wtc = wasmtime::Config::default();
         Ok(Self {
@@ -134,7 +134,7 @@ impl WorkCache {
     /// this returns an error if `tt` is not present in `sts`.
     pub fn run_recursively(
         &mut self,
-        parent: &Engine,
+        parent: &WasmEngine,
         mut tt: BTreeSet<Hash>,
         main_evid: Hash,
         incl: IncludeSpec,
@@ -204,7 +204,7 @@ impl WorkCache {
 
     pub fn run_foreach_recursively(
         &mut self,
-        parent: &Engine,
+        parent: &WasmEngine,
         evids: BTreeMap<Hash, IncludeSpec>,
     ) -> anyhow::Result<(&[u8], BTreeSet<Hash>)> {
         let tt = evids
@@ -220,7 +220,7 @@ impl WorkCache {
     /// NOTE: this ignores the contents of `ev.deps`
     pub fn shelve_event(
         &mut self,
-        parent: &mut Engine,
+        parent: &mut WasmEngine,
         mut seed_deps: BTreeSet<Hash>,
         ev: Event,
     ) -> anyhow::Result<Option<Hash>> {
@@ -344,7 +344,7 @@ impl WorkCache {
 
     pub fn check_if_mergable(
         &mut self,
-        parent: &Engine,
+        parent: &WasmEngine,
         sts: BTreeSet<Hash>,
     ) -> anyhow::Result<Option<Self>> {
         // we run this recursively (and non-parallel), which is a bit unfortunate,

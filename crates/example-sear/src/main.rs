@@ -14,7 +14,7 @@ fn sev(search: &str, replacement: &str) -> esvc_core::Event {
 }
 
 fn main() {
-    let mut e = esvc_core::Engine::new().expect("unable to initialize engine");
+    let mut e = esvc_core::WasmEngine::new().expect("unable to initialize engine");
     e.add_commands(Some(
         std::fs::read("../../../wasm-crates/example-sear/pkg/example_sear_bg.wasm")
             .expect("unable to read module"),

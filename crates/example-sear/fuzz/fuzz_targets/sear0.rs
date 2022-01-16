@@ -5,8 +5,8 @@ use once_cell::sync::Lazy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::from_utf8;
 
-static E: Lazy<esvc_core::Engine> = Lazy::new(|| {
-    let mut e = esvc_core::Engine::new().expect("unable to initialize engine");
+static E: Lazy<esvc_core::WasmEngine> = Lazy::new(|| {
+    let mut e = esvc_core::WasmEngine::new().expect("unable to initialize engine");
     e.add_commands(Some(
         include_bytes!("../../../../wasm-crates/example-sear/pkg/example_sear_bg.wasm").to_vec(),
     ))
@@ -74,7 +74,7 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         acc.replace(&*item.search, &item.replacement)
     });
 
-    let mut e: esvc_core::Engine = (*E).clone();
+    let mut e: esvc_core::WasmEngine = (*E).clone();
 
     let mut xs = BTreeSet::new();
     for i in sears {
