@@ -24,9 +24,6 @@ pub enum IncludeSpec {
 pub struct Graph {
     pub events: BTreeMap<Hash, Event>,
 
-    /// cmds entries contain WASM bytecode
-    pub cmds: Vec<Vec<u8>>,
-
     /// saved combined states
     pub nstates: BTreeMap<String, BTreeSet<Hash>>,
 }

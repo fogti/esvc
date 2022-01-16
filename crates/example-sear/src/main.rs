@@ -15,10 +15,10 @@ fn sev(search: &str, replacement: &str) -> esvc_core::Event {
 
 fn main() {
     let mut e = esvc_core::Engine::new().expect("unable to initialize engine");
-    e.add_command(
+    e.add_commands(Some(
         std::fs::read("../../../wasm-crates/example-sear/pkg/example_sear_bg.wasm")
             .expect("unable to read module"),
-    )
+    ))
     .expect("unable to insert module");
 
     let mut w = esvc_core::WorkCache::new("Hi, what's up??".to_string().into());
@@ -61,20 +61,19 @@ fn main() {
     println!();
 
     println!(":: e.graph.events[] ::");
-    for (h, ev) in &e.graph().events {
+    for (h, ev) in &e.g.events {
         println!("{} {}", h, from_utf8(&ev.arg[..]).unwrap());
         esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
         println!();
     }
 
     println!(":: minx ::");
-    let minx: BTreeSet<_> = e
-        .graph()
-        .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
-        .unwrap()
-        .into_iter()
-        .map(|x| x.0)
-        .collect();
+    let minx: BTreeSet<_> =
+        e.g.fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.0)
+            .collect();
     esvc_core::print_deps(&mut std::io::stdout(), "", minx.iter().copied()).unwrap();
     println!();
 

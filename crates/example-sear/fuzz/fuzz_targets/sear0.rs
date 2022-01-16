@@ -7,9 +7,9 @@ use std::str::from_utf8;
 
 static E: Lazy<esvc_core::Engine> = Lazy::new(|| {
     let mut e = esvc_core::Engine::new().expect("unable to initialize engine");
-    e.add_command(
+    e.add_commands(Some(
         include_bytes!("../../../../wasm-crates/example-sear/pkg/example_sear_bg.wasm").to_vec(),
-    )
+    ))
     .expect("unable to insert module");
     e
 });
@@ -86,13 +86,12 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         }
     }
 
-    let minx: BTreeSet<_> = e
-        .graph()
-        .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
-        .unwrap()
-        .into_iter()
-        .map(|x| x.0)
-        .collect();
+    let minx: BTreeSet<_> =
+        e.g.fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.0)
+            .collect();
 
     let evs: BTreeMap<_, _> = minx
         .iter()
@@ -107,7 +106,7 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         eprintln!("exp: {:?}", expected_result);
 
         println!(":: e.graph.events[] ::");
-        for (h, ev) in &e.graph().events {
+        for (h, ev) in &e.g.events {
             println!("{} {}", h, from_utf8(&ev.arg[..]).unwrap());
             esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
             println!();
@@ -117,7 +116,7 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         esvc_core::print_deps(
             &mut std::io::stdout(),
             ">> ",
-            e.graph().debug_exec_order(evs).unwrap().into_iter(),
+            e.g.debug_exec_order(evs).unwrap().into_iter(),
         )
         .unwrap();
 

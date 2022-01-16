@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone)]
 pub struct Engine {
     wte: wasmtime::Engine,
-    g: Graph,
+    pub g: Graph,
     cmds: Vec<wasmtime::Module>,
 }
 
@@ -83,31 +83,22 @@ impl Engine {
         })
     }
 
-    #[inline]
-    pub fn graph(&self) -> &Graph {
-        &self.g
-    }
-
-    pub fn with_graph(&self, g: Graph) -> anyhow::Result<Self> {
-        let cmds = g
-            .cmds
-            .par_iter()
-            .map(|cmd| wasmtime::Module::new(&self.wte, cmd))
-            .collect::<Result<_, _>>()?;
-        Ok(Self {
-            wte: self.wte.clone(),
-            g,
-            cmds,
-        })
-    }
-
-    pub fn add_command(&mut self, wasm: Vec<u8>) -> anyhow::Result<u32> {
-        assert_eq!(self.g.cmds.len(), self.cmds.len());
-        let id: u32 = self.g.cmds.len().try_into()?;
-        let comp = wasmtime::Module::new(&self.wte, &wasm[..])?;
-        self.g.cmds.push(wasm);
-        self.cmds.push(comp);
-        Ok(id)
+    pub fn add_commands<II, Iter, Item>(&mut self, wasms: II) -> anyhow::Result<(u32, usize)>
+    where
+        II: IntoIterator<IntoIter = Iter>,
+        Iter: Iterator<Item = Item> + Send,
+        Item: AsRef<[u8]> + Send,
+    {
+        let orig_id = self.cmds.len();
+        let id: u32 = orig_id.try_into()?;
+        self.cmds.extend(
+            wasms
+                .into_iter()
+                .par_bridge()
+                .map(|cmd| wasmtime::Module::new(&self.wte, cmd))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        Ok((id, self.cmds.len() - orig_id))
     }
 
     fn get_cmd_module(&self, cmd: u32) -> Option<&wasmtime::Module> {
