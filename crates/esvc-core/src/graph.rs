@@ -392,14 +392,20 @@ impl WorkCache {
                 )?;
                 let conc_ev = parent.g.events.get(&conc_evid).unwrap();
                 let conc_cmd = parent
-                    .get_cmd_module(ev.cmd)
+                    .get_cmd_module(conc_ev.cmd)
                     .ok_or_else(|| anyhow_!("unable to lookup event command for {}", conc_evid))?;
                 let wte = &parent.wte;
-                let x =
+                let st_after_apply = if ev.cmd == conc_ev.cmd && ev.arg == conc_ev.arg {
+                    // necessary for non-idempotent events (e.g. s/0/0000/g)
+                    // base_st + conc = cur_st, so we detect if conc has an effect
+                    // even if it was already applied
+                    base_st.to_vec()
+                } else {
                     run_event_bare(wte, &cur_cmd, &ev.arg[..], base_st).and_then(|next_st| {
                         run_event_bare(wte, conc_cmd, &conc_ev.arg[..], &next_st[..])
-                    })?;
-                if x == cur_st {
+                    })?
+                };
+                if cur_st == st_after_apply {
                     // independent -> move backward
                     new_seed_deps.extend(conc_ev.deps.iter().copied());
                 } else {
