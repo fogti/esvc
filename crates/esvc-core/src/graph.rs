@@ -375,7 +375,7 @@ impl WorkCache {
         parent: &mut Engine,
         mut seed_deps: BTreeSet<Hash>,
         ev: Event,
-    ) -> anyhow::Result<Hash> {
+    ) -> anyhow::Result<Option<Hash>> {
         let cur_cmd = parent
             .get_cmd_module(ev.cmd)
             .ok_or_else(|| anyhow_!("unable to lookup event command for {:?}", ev))?
@@ -392,7 +392,7 @@ impl WorkCache {
         while !seed_deps.is_empty() {
             let mut new_seed_deps = BTreeSet::new();
             // calculate cur state
-            let (cur_st, _) = self.run_foreach_recursively(
+            let (base_st, _) = self.run_foreach_recursively(
                 parent,
                 seed_deps
                     .iter()
@@ -406,7 +406,11 @@ impl WorkCache {
                     .map(|&i| (i, IncludeSpec::IncludeAll))
                     .collect(),
             )?;
-            let cur_st = run_event_bare(&parent.wte, &cur_cmd, &ev.arg[..], cur_st)?;
+            let cur_st = run_event_bare(&parent.wte, &cur_cmd, &ev.arg[..], base_st)?;
+            if cur_deps.is_empty() && base_st == &cur_st[..] {
+                // this is a no-op event, we can't handle it anyways.
+                return Ok(None);
+            }
 
             for &conc_evid in &seed_deps {
                 if cur_deps.contains_key(&conc_evid) {
@@ -440,17 +444,21 @@ impl WorkCache {
                     .get_cmd_module(conc_ev.cmd)
                     .ok_or_else(|| anyhow_!("unable to lookup event command for {}", conc_evid))?;
                 let wte = &parent.wte;
-                let st_after_apply = if ev.cmd == conc_ev.cmd && ev.arg == conc_ev.arg {
+                let is_indep = if cur_st == base_st {
+                    // this is a NOP, needs to be skipped to avoid invalid
+                    // reorderings later
+                    true
+                } else if ev.cmd == conc_ev.cmd && ev.arg == conc_ev.arg {
                     // necessary for non-idempotent events (e.g. s/0/0000/g)
                     // base_st + conc = cur_st, so we detect if conc has an effect
-                    // even if it was already applied
-                    base_st.to_vec()
+                    // even if it was already applied (case above)
+                    false
                 } else {
                     run_event_bare(wte, &cur_cmd, &ev.arg[..], base_st).and_then(|next_st| {
                         run_event_bare(wte, conc_cmd, &conc_ev.arg[..], &next_st[..])
-                    })?
+                    })? == cur_st
                 };
-                if cur_st == st_after_apply {
+                if is_indep {
                     // independent -> move backward
                     new_seed_deps.extend(conc_ev.deps.iter().copied());
                 } else {
@@ -483,7 +491,7 @@ impl WorkCache {
             );
         }
 
-        Ok(evhash)
+        Ok(Some(evhash))
     }
 
     pub fn check_if_mergable(

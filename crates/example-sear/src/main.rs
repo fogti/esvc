@@ -36,10 +36,12 @@ fn main() {
         sev("sup!", "soap?"),
         sev("p", "np"),
     ] {
-        xs.insert(
-            w.shelve_event(&mut e, xs.clone(), i)
-                .expect("unable to shelve event"),
-        );
+        if let Some(h) = w
+            .shelve_event(&mut e, xs.clone(), i)
+            .expect("unable to shelve event")
+        {
+            xs.insert(h);
+        }
     }
 
     println!(

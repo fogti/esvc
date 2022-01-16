@@ -78,10 +78,12 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
 
     let mut xs = BTreeSet::new();
     for i in sears {
-        xs.insert(
-            w.shelve_event(&mut e, xs.clone(), i.into())
-                .expect("unable to shelve event"),
-        );
+        if let Some(h) = w
+            .shelve_event(&mut e, xs.clone(), i.into())
+            .expect("unable to shelve event")
+        {
+            xs.insert(h);
+        }
     }
 
     let minx: BTreeSet<_> = e
