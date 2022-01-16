@@ -1,8 +1,10 @@
 [package]
 name = "esvc-wasm"
+description = "WASM engine for ESVC"
 version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0 WITH LLVM-exception"
+repository = "https://github.com/zseri/esvc"
 
 [dependencies]
 rayon = "1.5"

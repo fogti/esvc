@@ -1,8 +1,10 @@
 [package]
 name = "esvc-core"
+description = "Core of ESVC (event sourcing version control)"
 version = "0.0.0"
 edition = "2021"
 license = "Apache-2.0 WITH LLVM-exception"
+repository = "https://github.com/zseri/esvc"
 
 [dependencies]
 base64 = "0.13"
