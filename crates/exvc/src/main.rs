@@ -1,6 +1,10 @@
 use ansi_term::Colour;
 use esvc_core::{Graph, WorkCache};
 use std::io::Write;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{Style, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use syntect::util::as_24_bit_terminal_escaped;
 
 mod addr;
 mod en;
@@ -10,7 +14,9 @@ type Arg = <en::ExEngine as esvc_core::Engine>::Arg;
 // TODO: add support for merging/rebasing
 
 struct Context<'en> {
-    path: Option<String>,
+    path: Option<camino::Utf8PathBuf>,
+    ps: SyntaxSet,
+    ts: ThemeSet,
     g: Graph<Arg>,
     w: WorkCache<'en, en::ExEngine>,
 }
@@ -67,18 +73,43 @@ impl Context<'_> {
                     )
                     .map_err(rewrap_wce)?;
                 let mut lnum = 0;
-                for (lines, dosmth) in en::resolve_addr(res, &addr)?.into_iter() {
-                    if dosmth {
+                let it = en::resolve_addr(res, &addr)?.into_iter();
+                if let Some(syntax) = self
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.extension())
+                    .and_then(|ext| self.ps.find_syntax_by_extension(ext))
+                {
+                    let mut h = HighlightLines::new(syntax, &self.ts.themes["base16-mocha.dark"]);
+                    for (lines, dosmth) in it {
                         for line in lines {
-                            println!(
-                                "{}: {}",
-                                Colour::Fixed(240).paint(format!("{:>5}", lnum)),
-                                line
-                            );
+                            // the highlighting needs to be kept in sync
+                            let ranges: Vec<(Style, &str)> = h.highlight(&line, &self.ps);
+                            if dosmth {
+                                let escaped = as_24_bit_terminal_escaped(&ranges[..], true);
+                                println!(
+                                    "{}: {}\x1b[0m",
+                                    Colour::Fixed(240).paint(format!("{:>5}", lnum)),
+                                    escaped
+                                );
+                            }
                             lnum += 1;
                         }
-                    } else {
-                        lnum += lines.len();
+                    }
+                } else {
+                    for (lines, dosmth) in it {
+                        if dosmth {
+                            for line in lines {
+                                println!(
+                                    "{}: {}",
+                                    Colour::Fixed(240).paint(format!("{:>5}", lnum)),
+                                    line
+                                );
+                                lnum += 1;
+                            }
+                        } else {
+                            lnum += lines.len();
+                        }
                     }
                 }
                 return Ok(());
@@ -168,6 +199,8 @@ fn main() -> anyhow::Result<()> {
     };
     let mut ctx = Context {
         path: None,
+        ps: SyntaxSet::load_defaults_newlines(),
+        ts: ThemeSet::load_defaults(),
         g: if let Some(arg) = &arg {
             if std::path::Path::new(arg).exists() {
                 let f = std::io::BufReader::new(std::fs::File::open(arg)?);
@@ -184,7 +217,7 @@ fn main() -> anyhow::Result<()> {
         },
         w: WorkCache::new(&e, vec![]),
     };
-    ctx.path = arg;
+    ctx.path = arg.map(Into::into);
 
     let is_atty = atty::is(atty::Stream::Stdin) && atty::is(atty::Stream::Stdout);
     let mut stdout = std::io::stdout();
