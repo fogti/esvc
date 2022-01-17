@@ -13,7 +13,6 @@ blake2 = "0.10"
 rayon = "1.5"
 serde_with = "1.11"
 thiserror = "1.0"
-tracing = "0.1"
 
 [dependencies.esvc-traits]
 version = "0.1"
@@ -23,9 +22,9 @@ path = "../esvc-traits"
 version = "1.0"
 features = ["derive"]
 
+[dependencies.tracing]
+version = "0.1"
+optional = true
+
 [dev-dependencies]
 tracing-subscriber = "0.3"
-
-[features]
-# internal, used to print traces during tests for debugging
-test--trace = []

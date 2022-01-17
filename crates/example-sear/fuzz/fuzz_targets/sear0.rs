@@ -78,7 +78,6 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
             .finish(),
         || {
     */
-            tracing::trace!("hewwo");
             let e = FuzzEngine;
             let mut g = esvc_core::Graph::default();
             let mut w = esvc_core::WorkCache::new(&e, init_data.0);

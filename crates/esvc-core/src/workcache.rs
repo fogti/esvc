@@ -3,7 +3,9 @@ use core::fmt;
 use esvc_traits::Engine;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
-use tracing::{event, instrument, Level};
+
+#[cfg(feature = "tracing")]
+use tracing::{event, Level};
 
 // NOTE: the elements of this *must* be public, because the user needs to be
 // able to deconstruct it if they want to modify the engine
@@ -139,7 +141,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
     }
 
     /// NOTE: this ignores the contents of `ev.deps`
-    #[instrument]
+    #[cfg_attr(feature = "tracing", tracing::instrument)]
     pub fn shelve_event(
         &mut self,
         graph: &mut Graph<En::Arg>,
@@ -175,12 +177,15 @@ impl<'a, En: Engine> WorkCache<'a, En> {
             let cur_st = engine
                 .run_event_bare(ev.cmd, &ev.arg, base_st)
                 .map_err(WorkCacheError::Engine)?;
+
+            #[cfg(feature = "tracing")]
             event!(
                 Level::TRACE,
                 "constructed state {:?} +cur> {:?}",
                 base_st,
                 cur_st
             );
+
             if cur_deps.is_empty() && base_st == &cur_st {
                 // this is a no-op event, we can't handle it anyways.
                 return Ok(None);
@@ -216,12 +221,14 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
                 let is_indep = if &cur_st == base_st {
                     // this is a revert
+                    #[cfg(feature = "tracing")]
                     event!(Level::TRACE, "{} is revert", conc_evid);
                     false
                 } else if ev.cmd == conc_ev.cmd && ev.arg == conc_ev.arg {
                     // necessary for non-idempotent events (e.g. s/0/0000/g)
                     // base_st + conc = cur_st, so we detect if conc has an effect
                     // even if it was already applied (case above)
+                    #[cfg(feature = "tracing")]
                     event!(Level::TRACE, "{} is non-idempotent", conc_evid);
                     false
                 } else {
@@ -234,6 +241,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                         .map_err(WorkCacheError::Engine)?
                         == cur_st
                 };
+                #[cfg(feature = "tracing")]
                 event!(
                     Level::TRACE,
                     "{} is {}dependent",
@@ -363,41 +371,41 @@ mod tests {
     }
 
     fn assert_no_reorder_inner(start: &str, sears: Vec<SearEvent<'static>>) {
-                let expected = sears
-                    .iter()
-                    .fold(start.to_string(), |acc, item| acc.replace(&item.0, &item.1));
-                let e = SearEngine;
-                let mut g = Graph::default();
-                let mut w = WorkCache::new(&e, start.to_string());
-                let mut xs = BTreeSet::new();
-                for i in sears {
-                    if let Some(h) = w
-                        .shelve_event(&mut g, xs.clone(), i.into())
-                        .expect("unable to shelve event")
-                    {
-                        xs.insert(h);
-                    }
-                }
+        let expected = sears
+            .iter()
+            .fold(start.to_string(), |acc, item| acc.replace(&item.0, &item.1));
+        let e = SearEngine;
+        let mut g = Graph::default();
+        let mut w = WorkCache::new(&e, start.to_string());
+        let mut xs = BTreeSet::new();
+        for i in sears {
+            if let Some(h) = w
+                .shelve_event(&mut g, xs.clone(), i.into())
+                .expect("unable to shelve event")
+            {
+                xs.insert(h);
+            }
+        }
 
-                let minx: BTreeSet<_> = g
-                    .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
-                    .unwrap()
-                    .into_iter()
-                    .map(|x| x.0)
-                    .collect();
+        let minx: BTreeSet<_> = g
+            .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.0)
+            .collect();
 
-                let evs: BTreeMap<_, _> = minx
-                    .iter()
-                    .map(|&i| (i, crate::IncludeSpec::IncludeAll))
-                    .collect();
+        let evs: BTreeMap<_, _> = minx
+            .iter()
+            .map(|&i| (i, crate::IncludeSpec::IncludeAll))
+            .collect();
 
-                let (got, tt) = w.run_foreach_recursively(&g, evs.clone()).unwrap();
-                assert_eq!(xs, tt);
-                assert_eq!(*got, expected);
+        let (got, tt) = w.run_foreach_recursively(&g, evs.clone()).unwrap();
+        assert_eq!(xs, tt);
+        assert_eq!(*got, expected);
     }
 
     fn assert_no_reorder(start: &str, sears: Vec<SearEvent<'static>>) {
-        #[cfg(feature = "test--trace")]
+        #[cfg(feature = "tracing")]
         tracing::subscriber::with_default(
             tracing_subscriber::fmt()
                 .with_max_level(tracing::Level::TRACE)
@@ -407,7 +415,7 @@ mod tests {
                 assert_no_reorder_inner(start, sears);
             },
         );
-        #[cfg(not(feature = "test--trace"))]
+        #[cfg(not(feature = "tracing"))]
         assert_no_reorder_inner(start, sears);
     }
 
