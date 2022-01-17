@@ -215,13 +215,14 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                 )?;
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
                 let is_indep = if &cur_st == base_st {
-                    // this is a NOP, needs to be skipped to avoid invalid
-                    // reorderings later
-                    true
+                    // this is a revert
+                    event!(Level::TRACE, "{} is revert", conc_evid);
+                    false
                 } else if ev.cmd == conc_ev.cmd && ev.arg == conc_ev.arg {
                     // necessary for non-idempotent events (e.g. s/0/0000/g)
                     // base_st + conc = cur_st, so we detect if conc has an effect
                     // even if it was already applied (case above)
+                    event!(Level::TRACE, "{} is non-idempotent", conc_evid);
                     false
                 } else {
                     engine
@@ -233,6 +234,12 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                         .map_err(WorkCacheError::Engine)?
                         == cur_st
                 };
+                event!(
+                    Level::TRACE,
+                    "{} is {}dependent",
+                    conc_evid,
+                    if is_indep { "in" } else { "" }
+                );
                 if is_indep {
                     // independent -> move backward
                     new_seed_deps.extend(conc_ev.deps.iter().copied());
@@ -355,13 +362,7 @@ mod tests {
         }
     }
 
-    fn assert_no_reorder(start: &str, sears: Vec<SearEvent<'static>>) {
-        tracing::subscriber::with_default(
-            tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::TRACE)
-                .with_writer(std::io::stderr)
-                .finish(),
-            || {
+    fn assert_no_reorder_inner(start: &str, sears: Vec<SearEvent<'static>>) {
                 let expected = sears
                     .iter()
                     .fold(start.to_string(), |acc, item| acc.replace(&item.0, &item.1));
@@ -393,8 +394,21 @@ mod tests {
                 let (got, tt) = w.run_foreach_recursively(&g, evs.clone()).unwrap();
                 assert_eq!(xs, tt);
                 assert_eq!(*got, expected);
+    }
+
+    fn assert_no_reorder(start: &str, sears: Vec<SearEvent<'static>>) {
+        #[cfg(feature = "test--trace")]
+        tracing::subscriber::with_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(std::io::stderr)
+                .finish(),
+            || {
+                assert_no_reorder_inner(start, sears);
             },
         );
+        #[cfg(not(feature = "test--trace"))]
+        assert_no_reorder_inner(start, sears);
     }
 
     #[test]
