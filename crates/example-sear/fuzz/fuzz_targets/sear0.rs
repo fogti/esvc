@@ -70,12 +70,14 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         acc.replace(&*item.search, &item.replacement)
     });
 
+    /*
     tracing::subscriber::with_default(
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::TRACE)
             .with_writer(std::io::stderr)
             .finish(),
         || {
+    */
             tracing::trace!("hewwo");
             let e = FuzzEngine;
             let mut g = esvc_core::Graph::default();
@@ -127,6 +129,8 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
 
                 panic!("results mismatch");
             }
+    /*
         },
     );
+    */
 });
