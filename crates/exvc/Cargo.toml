@@ -1,0 +1,21 @@
+[package]
+name = "exvc"
+description = "ex-like editor working on an exvc graph underneath"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ansi_term = "0.12"
+anyhow = "1.0"
+atty = "0.2"
+bincode = "1.3"
+regex = "1.5"
+serde = "1.0"
+
+[dependencies.esvc-core]
+version = "0.1"
+path = "../esvc-core"
+
+[dependencies.zstd]
+version = "0.9"
+default-features = false
