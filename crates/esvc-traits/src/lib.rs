@@ -9,8 +9,8 @@ impl<T: Sync + Send + 'static> EngineError for T {}
 pub trait CommandArg: Sized + Debug + Sync + PartialEq + serde::Serialize {}
 impl<T: Debug + Sync + PartialEq + serde::Serialize> CommandArg for T {}
 
-pub trait FlowData: Sized + Clone + Sync + Send + PartialEq {}
-impl<T: Clone + Sync + Send + PartialEq> FlowData for T {}
+pub trait FlowData: Sized + Clone + Debug + Sync + Send + PartialEq {}
+impl<T: Clone + Debug + Sync + Send + PartialEq> FlowData for T {}
 
 pub trait Engine: Sync {
     type Error: EngineError;

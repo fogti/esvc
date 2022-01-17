@@ -70,53 +70,63 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
         acc.replace(&*item.search, &item.replacement)
     });
 
-    let e = FuzzEngine;
-    let mut g = esvc_core::Graph::default();
-    let mut w = esvc_core::WorkCache::new(&e, init_data.0);
+    tracing::subscriber::with_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(std::io::stderr)
+            .finish(),
+        || {
+            tracing::trace!("hewwo");
+            let e = FuzzEngine;
+            let mut g = esvc_core::Graph::default();
+            let mut w = esvc_core::WorkCache::new(&e, init_data.0);
 
-    let mut xs = BTreeSet::new();
-    for i in sears {
-        if let Some(h) = w
-            .shelve_event(&mut g, xs.clone(), i.into())
-            .expect("unable to shelve event")
-        {
-            xs.insert(h);
-        }
-    }
+            let mut xs = BTreeSet::new();
+            for i in sears {
+                if let Some(h) = w
+                    .shelve_event(&mut g, xs.clone(), i.into())
+                    .expect("unable to shelve event")
+                {
+                    xs.insert(h);
+                }
+            }
 
-    let minx: BTreeSet<_> = g
-        .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
-        .unwrap()
-        .into_iter()
-        .map(|x| x.0)
-        .collect();
+            let minx: BTreeSet<_> = g
+                .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
+                .unwrap()
+                .into_iter()
+                .map(|x| x.0)
+                .collect();
 
-    let evs: BTreeMap<_, _> = minx
-        .iter()
-        .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
-        .collect();
+            let evs: BTreeMap<_, _> = minx
+                .iter()
+                .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
+                .collect();
 
-    let (got, tt) = w.run_foreach_recursively(&g, evs.clone()).unwrap();
-    assert_eq!(xs, tt);
-    if got != &*expected_result {
-        eprintln!("got: {:?}", got);
-        eprintln!("exp: {:?}", expected_result);
+            let (got, tt) = w.run_foreach_recursively(&g, evs.clone()).unwrap();
+            assert_eq!(xs, tt);
+            if got != &*expected_result {
+                eprintln!("got: {:?}", got);
+                eprintln!("exp: {:?}", expected_result);
 
-        println!(":: e.graph.events[] ::");
-        for (h, ev) in &g.events {
-            println!("{} {:?}", h, ev.arg);
-            esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
-            println!();
-        }
+                println!(":: e.graph.events[] ::");
+                for (h, ev) in &g.events {
+                    println!("{} {:?}", h, ev.arg);
+                    esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied())
+                        .unwrap();
+                    println!();
+                }
 
-        println!("exec order ::");
-        esvc_core::print_deps(
-            &mut std::io::stdout(),
-            ">> ",
-            g.debug_exec_order(evs).unwrap().into_iter(),
-        )
-        .unwrap();
+                println!("exec order ::");
+                esvc_core::print_deps(
+                    &mut std::io::stdout(),
+                    ">> ",
+                    g.debug_exec_order(evs).unwrap().into_iter(),
+                )
+                .unwrap();
 
-        panic!("results mismatch");
-    }
+                panic!("results mismatch");
+            }
+        },
+    );
 });

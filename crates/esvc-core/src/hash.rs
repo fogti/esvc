@@ -8,7 +8,7 @@ use std::fmt;
 /// might massively exceed the compatiblity benefit.
 #[repr(C)]
 #[serde_with::serde_as]
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Hash {
     Blake2b512(#[serde_as(as = "serde_with::Bytes")] [u8; 64]),
 }
@@ -22,6 +22,13 @@ impl fmt::Display for Hash {
             Hash::Blake2b512(ref x) => (HASH_BLK2512_PFX, x),
         };
         write!(f, "{}{}", kind, base64::encode_config(bytes, HASH_B64_CFG))
+    }
+}
+
+impl fmt::Debug for Hash {
+    // forward to Display impl because it's more readable
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Hash as fmt::Display>::fmt(self, f)
     }
 }
 

@@ -1,7 +1,9 @@
 use crate::{Event, Graph, GraphError, Hash, IncludeSpec};
+use core::fmt;
 use esvc_traits::Engine;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
+use tracing::{event, instrument, Level};
 
 // NOTE: the elements of this *must* be public, because the user needs to be
 // able to deconstruct it if they want to modify the engine
@@ -22,6 +24,14 @@ impl<'a, En: Engine> core::clone::Clone for WorkCache<'a, En> {
     fn clone_from(&mut self, other: &Self) {
         self.engine = other.engine;
         self.sts.clone_from(&other.sts);
+    }
+}
+
+impl<En: Engine> fmt::Debug for WorkCache<'_, En> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorkCache")
+            .field("sts", &self.sts)
+            .finish_non_exhaustive()
     }
 }
 
@@ -129,6 +139,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
     }
 
     /// NOTE: this ignores the contents of `ev.deps`
+    #[instrument]
     pub fn shelve_event(
         &mut self,
         graph: &mut Graph<En::Arg>,
@@ -164,6 +175,12 @@ impl<'a, En: Engine> WorkCache<'a, En> {
             let cur_st = engine
                 .run_event_bare(ev.cmd, &ev.arg, base_st)
                 .map_err(WorkCacheError::Engine)?;
+            event!(
+                Level::TRACE,
+                "constructed state {:?} +cur> {:?}",
+                base_st,
+                cur_st
+            );
             if cur_deps.is_empty() && base_st == &cur_st {
                 // this is a no-op event, we can't handle it anyways.
                 return Ok(None);
@@ -304,5 +321,119 @@ impl<'a, En: Engine> WorkCache<'a, En> {
             engine: self.engine,
             sts,
         }))
+    }
+}
+
+// this is somewhat equivalent to the fuzzer code,
+// and is used to test known edge cases
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[derive(Clone, Debug, PartialEq, serde::Serialize)]
+    struct SearEvent<'a>(&'a str, &'a str);
+
+    impl<'a> From<SearEvent<'a>> for Event<SearEvent<'a>> {
+        fn from(ev: SearEvent<'a>) -> Self {
+            Event {
+                cmd: 0,
+                arg: ev,
+                deps: Default::default(),
+            }
+        }
+    }
+
+    struct SearEngine;
+
+    impl Engine for SearEngine {
+        type Error = ();
+        type Arg = SearEvent<'static>;
+        type Dat = String;
+
+        fn run_event_bare(&self, cmd: u32, arg: &SearEvent, dat: &String) -> Result<String, ()> {
+            assert_eq!(cmd, 0);
+            Ok(dat.replace(&arg.0, &arg.1))
+        }
+    }
+
+    fn assert_no_reorder(start: &str, sears: Vec<SearEvent<'static>>) {
+        tracing::subscriber::with_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(std::io::stderr)
+                .finish(),
+            || {
+                let expected = sears
+                    .iter()
+                    .fold(start.to_string(), |acc, item| acc.replace(&item.0, &item.1));
+                let e = SearEngine;
+                let mut g = Graph::default();
+                let mut w = WorkCache::new(&e, start.to_string());
+                let mut xs = BTreeSet::new();
+                for i in sears {
+                    if let Some(h) = w
+                        .shelve_event(&mut g, xs.clone(), i.into())
+                        .expect("unable to shelve event")
+                    {
+                        xs.insert(h);
+                    }
+                }
+
+                let minx: BTreeSet<_> = g
+                    .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
+                    .unwrap()
+                    .into_iter()
+                    .map(|x| x.0)
+                    .collect();
+
+                let evs: BTreeMap<_, _> = minx
+                    .iter()
+                    .map(|&i| (i, crate::IncludeSpec::IncludeAll))
+                    .collect();
+
+                let (got, tt) = w.run_foreach_recursively(&g, evs.clone()).unwrap();
+                assert_eq!(xs, tt);
+                assert_eq!(*got, expected);
+            },
+        );
+    }
+
+    #[test]
+    fn equal_but_non_idempotent() {
+        assert_no_reorder(
+            "x",
+            vec![
+                SearEvent("x", "xx"),
+                SearEvent("x", "xx"),
+                SearEvent("x", "y"),
+            ],
+        );
+    }
+
+    #[test]
+    fn indirect_dep() {
+        assert_no_reorder(
+            "Hi, what's up??",
+            vec![
+                SearEvent("Hi", "Hello UwU"),
+                SearEvent("UwU", "World"),
+                SearEvent("what", "wow"),
+                SearEvent("s up", "sup"),
+                SearEvent("??", "!"),
+                SearEvent("sup!", "soap?"),
+                SearEvent("p", "np"),
+            ],
+        );
+    }
+
+    #[test]
+    fn revert_then() {
+        assert_no_reorder(
+            "a",
+            vec![
+                SearEvent("a", "xaa"),
+                SearEvent("xa", ""),
+                SearEvent("a", "bbbbb"),
+            ],
+        );
     }
 }
