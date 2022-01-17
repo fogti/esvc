@@ -219,6 +219,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                         .collect(),
                 )?;
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
+                #[allow(clippy::if_same_then_else)]
                 let is_indep = if &cur_st == base_st {
                     // this is a revert
                     #[cfg(feature = "tracing")]

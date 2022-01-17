@@ -135,11 +135,14 @@ impl<Arg: Serialize> Graph<Arg> {
     }
 }
 
-impl<Arg: esvc_traits::CommandArg> Graph<Arg> {
+impl<Arg> Graph<Arg> {
     /// get-or-insert event, check if it matches
     ///
     /// @returns (Some(@arg ev) if collision else None, Hash of @arg ev)
-    pub fn ensure_event(&mut self, ev: Event<Arg>) -> (Option<Event<Arg>>, Hash) {
+    pub fn ensure_event(&mut self, ev: Event<Arg>) -> (Option<Event<Arg>>, Hash)
+    where
+        Arg: esvc_traits::CommandArg,
+    {
         let serval = bincode::serialize::<Event<Arg>>(&ev).unwrap();
         let h = crate::calculate_hash(&serval[..]);
         use std::collections::btree_map::Entry;

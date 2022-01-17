@@ -68,6 +68,9 @@ fn main() {
         println!();
     }
 
+    println!(":: e.graph as .dot ::");
+    println!("{:?}", esvc_core::Dot(&g));
+
     println!(":: minx ::");
     let minx: BTreeSet<_> = g
         .fold_state(xs.iter().map(|&y| (y, false)).collect(), false)
