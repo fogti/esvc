@@ -137,7 +137,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
         while !seed_deps.is_empty() {
             let mut new_seed_deps = BTreeSet::new();
             // calculate cur state
-            let (base_st, _) = self.run_foreach_recursively(
+            let (base_st, _base_tt) = self.run_foreach_recursively(
                 graph,
                 seed_deps
                     .iter()
@@ -158,7 +158,8 @@ impl<'a, En: Engine> WorkCache<'a, En> {
             #[cfg(feature = "tracing")]
             event!(
                 Level::TRACE,
-                "constructed state {:?} +cur> {:?}",
+                "from {:?} constructed state {:?} +cur> {:?}",
+                _base_tt,
                 base_st,
                 cur_st
             );
@@ -201,7 +202,11 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                     // to the next seed if necessary
                     // TODO: add a unit test for this
                     #[cfg(feature = "tracing")]
-                    event!(Level::TRACE, "{} is pulled in multiple times, skip", conc_evid);
+                    event!(
+                        Level::TRACE,
+                        "{} is pulled in multiple times, skip",
+                        conc_evid
+                    );
                     continue;
                 }
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
@@ -439,6 +444,46 @@ mod tests {
                 SearEvent("a", "xaa"),
                 SearEvent("xa", ""),
                 SearEvent("a", "bbbbb"),
+            ],
+        );
+    }
+
+    #[test]
+    fn diverg_mult_steps() {
+        assert_no_reorder(
+            "XXXXX",
+            vec![
+                SearEvent("X", "XXXX"),
+                SearEvent("X", "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"),
+                SearEvent("XXXXXXXXXX", "XXXXXXXXXXXXXX"),
+            ],
+        );
+    }
+
+    #[test]
+    fn diverg_mult_steps2() {
+        // 920 vs 1288
+        assert_no_reorder(
+            // 5
+            "\0\0\0\0\0",
+            vec![
+                SearEvent(
+                    //  1 ->  4
+                    "\0",
+                    "\0\0\0\0",
+                ),
+                SearEvent(
+                    //  1 -> 46
+                    "\0",
+                    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+                ),
+                // if the last event is reordered to the start,
+                // then it fails to apply
+                SearEvent(
+                    // 10 -> 14
+                    "\0\0\0\0\0\0\0\0\0\0",
+                    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+                ),
             ],
         );
     }
