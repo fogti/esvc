@@ -1,7 +1,6 @@
 use crate::{Event, Graph, GraphError, Hash, IncludeSpec};
 use core::fmt;
 use esvc_traits::Engine;
-use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(feature = "tracing")]
@@ -44,6 +43,12 @@ pub enum WorkCacheError<EE> {
 
     #[error(transparent)]
     Graph(#[from] GraphError),
+
+    #[error("event {0}: merge failed, new resulting hash was (1)")]
+    HashChangeAtMerge(Hash, Hash),
+
+    #[error("event {0} got turned into a no-op at merge")]
+    NoopAtMerge(Hash),
 
     #[error(transparent)]
     Engine(EE),
@@ -261,62 +266,31 @@ impl<'a, En: Engine> WorkCache<'a, En> {
         Ok(Some(evhash))
     }
 
-    pub fn check_if_mergable(
+    pub fn try_merge(
         &mut self,
-        graph: &Graph<En::Arg>,
+        graph: &mut Graph<En::Arg>,
         sts: BTreeSet<Hash>,
-    ) -> Result<Option<Self>, WorkCacheError<En::Error>> {
-        // we run this recursively (and non-parallel), which is a bit unfortunate,
-        // but we get the benefit that we can share the cache...
-        let bases = sts
-            .iter()
-            .map(|&h| {
-                self.run_recursively(graph, BTreeSet::new(), h, IncludeSpec::IncludeAll)
-                    .map(|r| (h, r.1))
-            })
-            .collect::<Result<BTreeMap<_, _>, _>>()?;
-
-        // calculate 2d matrix
-        let ret = bases
-            .iter()
-            .enumerate()
-            .flat_map(|(ni, (_, i))| {
-                sts.iter()
-                    .enumerate()
-                    .filter(move |(nj, _)| ni != *nj)
-                    .map(|(_, &j)| (i.clone(), j))
-            })
-            .collect::<Vec<_>>()
-            .into_par_iter()
-            // source: https://sts10.github.io/2019/06/06/is-all-equal-function.html
-            .try_fold(|| (true, None), {
-                |acc: (bool, Option<_>), (i, j)| {
-                    if !acc.0 {
-                        return Ok((false, None));
-                    }
-                    let mut this = self.clone();
-                    this.run_recursively(graph, i, j, IncludeSpec::IncludeAll)?;
-                    let elem = this.sts;
-                    Ok(if acc.1.map(|prev| prev == elem).unwrap_or(true) {
-                        (true, Some(elem))
-                    } else {
-                        (false, None)
-                    })
-                }
-            })
-            .collect::<Result<Vec<_>, WorkCacheError<_>>>()?
+    ) -> Result<(), WorkCacheError<En::Error>>
+    where
+        En::Arg: Clone,
+    {
+        let mut seed_deps: BTreeSet<_> = graph
+            .fold_state(sts.iter().map(|&h| (h, false)).collect(), false)?
             .into_iter()
-            .flat_map(|(uacc, x)| x.map(|y| (uacc, y)))
-            .fold((true, None), {
-                |acc, (uacc, elem)| {
-                    let is_mrgb = uacc && acc.0 && acc.1.map(|prev| prev == elem).unwrap_or(true);
-                    (is_mrgb, if is_mrgb { Some(elem) } else { None })
+            .map(|(h, _)| h)
+            .collect();
+        for i in sts {
+            let ev = graph.events[&i].clone();
+            if let Some(ih) = self.shelve_event(graph, seed_deps.clone(), ev)? {
+                if ih != i {
+                    return Err(WorkCacheError::HashChangeAtMerge(i, ih));
                 }
-            });
-        Ok(ret.1.map(|sts| Self {
-            engine: self.engine,
-            sts,
-        }))
+                seed_deps.insert(ih);
+            } else {
+                return Err(WorkCacheError::NoopAtMerge(i));
+            }
+        }
+        Ok(())
     }
 }
 

@@ -375,7 +375,6 @@ dependencies = [
  "bincode",
  "blake2",
  "esvc-traits",
- "rayon",
  "serde",
  "serde_with",
  "thiserror",

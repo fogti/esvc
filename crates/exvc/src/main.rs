@@ -11,8 +11,6 @@ mod en;
 
 type Arg = <en::ExEngine as esvc_core::Engine>::Arg;
 
-// TODO: add support for merging/rebasing
-
 struct Context<'en> {
     path: Option<camino::Utf8PathBuf>,
     ps: SyntaxSet,
@@ -22,10 +20,13 @@ struct Context<'en> {
 }
 
 fn rewrap_wce(e: esvc_core::WorkCacheError<anyhow::Error>) -> anyhow::Error {
+    use core::convert::Infallible as Inf;
     use esvc_core::WorkCacheError as Wce;
     match e {
-        Wce::CommandNotFound(e) => Wce::<core::convert::Infallible>::CommandNotFound(e).into(),
-        Wce::Graph(e) => Wce::<core::convert::Infallible>::Graph(e).into(),
+        Wce::CommandNotFound(e) => Wce::<Inf>::CommandNotFound(e).into(),
+        Wce::Graph(e) => Wce::<Inf>::Graph(e).into(),
+        Wce::HashChangeAtMerge(a, b) => Wce::<Inf>::HashChangeAtMerge(a, b).into(),
+        Wce::NoopAtMerge(h) => Wce::<Inf>::NoopAtMerge(h).into(),
         Wce::Engine(e) => e,
     }
 }
@@ -52,6 +53,62 @@ impl Context<'_> {
             } else {
                 anyhow::bail!("no file path is associated with this session");
             }
+        } else if line == "m<" {
+            let mut line = String::new();
+            let stdin = std::io::stdin();
+            stdin.read_line(&mut line)?;
+            line.truncate(line.trim_end_matches(&['\r', '\n'][..]).len());
+
+            let f = std::io::BufReader::new(std::fs::File::open(line)?);
+            let fz = zstd::stream::read::Decoder::new(f)?;
+            let tmpgraph = bincode::deserialize_from::<_, Graph<Arg>>(fz)?;
+
+            let other_estate = tmpgraph
+                .nstates
+                .get("")
+                .ok_or_else(|| anyhow::anyhow!("other file doesn't contain state set"))?;
+            let full_odeps = tmpgraph.calculate_dependencies(
+                Default::default(),
+                other_estate
+                    .iter()
+                    .map(|&i| (i, esvc_core::IncludeSpec::IncludeAll))
+                    .collect(),
+            )?;
+
+            for i in full_odeps {
+                print!(".");
+                let (coll, h) = self.g.ensure_event(tmpgraph.events[&i].clone());
+                if let Some(coll) = coll {
+                    anyhow::bail!(
+                        "hash collision @ {} detected during insertion of {:?}",
+                        h,
+                        coll,
+                    );
+                }
+            }
+            println!();
+            println!("minimize state...");
+            let xsts = self.g.nstates[""]
+                .iter()
+                .chain(other_estate.iter())
+                .map(|&h| (h, false))
+                .collect();
+            let xsts: std::collections::BTreeSet<_> = self
+                .g
+                .fold_state(xsts, false)?
+                .into_iter()
+                .map(|(h, _)| h)
+                .collect();
+            println!("try to merge...");
+            self.w
+                .try_merge(&mut self.g, xsts.clone())
+                .map_err(rewrap_wce)?;
+            println!("{}", Colour::Green.paint("OK"));
+            for h in &xsts {
+                println!("{} {}", Colour::Blue.paint(">>"), h);
+            }
+            self.g.nstates.insert(String::new(), xsts);
+            true
         } else {
             false
         })
@@ -173,20 +230,19 @@ impl Context<'_> {
         {
             println!("{} {}", Colour::Blue.paint(">>"), h);
             if self.g.nstates[""].len() > 100 {
-                let st = match self.g.fold_state(
-                    self.g.nstates[""]
-                        .iter()
-                        .chain(core::iter::once(&h))
-                        .map(|&y| (y, false))
-                        .collect(),
-                    false,
-                ) {
-                    Some(x) => x,
-                    None => anyhow::bail!("unable to resolve dependencies of current state"),
-                }
-                .into_iter()
-                .map(|x| x.0)
-                .collect();
+                let st = self
+                    .g
+                    .fold_state(
+                        self.g.nstates[""]
+                            .iter()
+                            .chain(core::iter::once(&h))
+                            .map(|&y| (y, false))
+                            .collect(),
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|x| x.0)
+                    .collect();
                 self.g.nstates.insert(String::new(), st);
             } else {
                 self.g.nstates.get_mut("").unwrap().insert(h);

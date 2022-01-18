@@ -8,7 +8,7 @@ pub struct ExEngine {
     pub rgxcache: Mutex<HashMap<String, Result<regex::Regex, regex::Error>>>,
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum CommandKind {
     Append(Vec<String>),
     Change(Vec<String>),
@@ -42,7 +42,7 @@ impl fmt::Display for CommandKind {
     }
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Command {
     Normal {
         addr: Address,

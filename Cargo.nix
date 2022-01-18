@@ -1097,10 +1097,6 @@ rec {
             packageId = "esvc-traits";
           }
           {
-            name = "rayon";
-            packageId = "rayon";
-          }
-          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];

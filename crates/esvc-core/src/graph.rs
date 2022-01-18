@@ -59,24 +59,16 @@ impl<Arg: Serialize> Graph<Arg> {
         &self,
         mut st: BTreeMap<Hash, bool>,
         expand: bool,
-    ) -> Option<BTreeMap<Hash, bool>> {
+    ) -> Result<BTreeMap<Hash, bool>, GraphError> {
         loop {
             let orig_len = st.len();
-            let mut errs = false;
-            st.extend(
-                st.clone()
-                    .into_iter()
-                    .flat_map(|(i, _)| match self.events.get(&i) {
-                        Some(x) => Some(x.deps.iter().map(|&j| (j, true))),
-                        None => {
-                            errs = true;
-                            None
-                        }
-                    })
-                    .flatten(),
-            );
-            if errs {
-                return None;
+            for (h, _) in st.clone() {
+                match self.events.get(&h) {
+                    Some(x) => st.extend(x.deps.iter().map(|&j| (j, true))),
+                    None => {
+                        return Err(GraphError::DependencyNotFound(h));
+                    }
+                }
             }
             if orig_len == st.len() {
                 break;
@@ -86,7 +78,7 @@ impl<Arg: Serialize> Graph<Arg> {
             // keep only non-dependencies
             st.retain(|_, is_dep| !*is_dep);
         }
-        Some(st)
+        Ok(st)
     }
 
     pub fn calculate_dependencies(
