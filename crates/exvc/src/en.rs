@@ -4,6 +4,7 @@ use esvc_core::Engine;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+#[derive(Debug)]
 pub struct ExEngine {
     pub rgxcache: Mutex<HashMap<String, Result<regex::Regex, regex::Error>>>,
 }
@@ -215,6 +216,7 @@ impl Engine for ExEngine {
     type Arg = Command;
     type Dat = Vec<String>;
 
+    #[cfg_attr(feature = "tracing_", tracing::instrument)]
     fn run_event_bare(
         &self,
         cmd: u32,
@@ -237,7 +239,7 @@ impl Engine for ExEngine {
               }
               */
         };
-        ErrPropagateFlatten {
+        let tmp = ErrPropagateFlatten {
             it: sel.into_iter().map(|(i, dosmth)| {
                 if dosmth {
                     cmds.iter()
@@ -248,6 +250,9 @@ impl Engine for ExEngine {
             }),
             acc: Default::default(),
         }
-        .collect()
+        .collect();
+        #[cfg(feature = "tracing_")]
+        tracing::trace!("ret={:?}", tmp);
+        tmp
     }
 }

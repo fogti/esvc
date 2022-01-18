@@ -1231,12 +1231,25 @@ rec {
             packageId = "syntect";
           }
           {
+            name = "tracing";
+            packageId = "tracing";
+            optional = true;
+          }
+          {
+            name = "tracing-subscriber";
+            packageId = "tracing-subscriber";
+            optional = true;
+          }
+          {
             name = "zstd";
             packageId = "zstd";
             usesDefaultFeatures = false;
           }
         ];
-
+        features = {
+          "tracing_" = [ "tracing" "tracing-subscriber" "esvc-core/tracing" ];
+        };
+        resolvedDefaultFeatures = [ "tracing" "tracing-subscriber" "tracing_" ];
       };
       "fallible-iterator" = rec {
         crateName = "fallible-iterator";

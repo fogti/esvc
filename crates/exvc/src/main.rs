@@ -107,7 +107,9 @@ impl Context<'_> {
             for h in &xsts {
                 println!("{} {}", Colour::Blue.paint(">>"), h);
             }
-            self.g.nstates.insert(String::new(), xsts);
+            if !xsts.is_empty() {
+                self.g.nstates.insert(String::new(), xsts);
+            }
             true
         } else {
             false
@@ -253,6 +255,9 @@ impl Context<'_> {
 }
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(feature = "tracing_")]
+    tracing_subscriber::fmt::init();
+
     let arg = std::env::args().nth(1);
     let e = en::ExEngine {
         rgxcache: Default::default(),
@@ -306,7 +311,14 @@ fn main() -> anyhow::Result<()> {
         line.clear();
         stdin.read_line(&mut line)?;
         line.truncate(line.trim_end_matches(&['\r', '\n'][..]).len());
-        if ctx.fullic(&line)? {
+        let tmp = match ctx.fullic(&line) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("{} {}", Colour::Red.paint("E:"), e);
+                continue;
+            }
+        };
+        if tmp {
             continue;
         } else if line == "q!" {
             break;

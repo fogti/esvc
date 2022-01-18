@@ -420,6 +420,8 @@ dependencies = [
  "regex",
  "serde",
  "syntect",
+ "tracing",
+ "tracing-subscriber",
  "zstd",
 ]
 

@@ -44,7 +44,7 @@ pub enum WorkCacheError<EE> {
     #[error(transparent)]
     Graph(#[from] GraphError),
 
-    #[error("event {0}: merge failed, new resulting hash was (1)")]
+    #[error("event {0}: merge failed, new resulting hash was {1}")]
     HashChangeAtMerge(Hash, Hash),
 
     #[error("event {0} got turned into a no-op at merge")]
@@ -131,8 +131,9 @@ impl<'a, En: Engine> WorkCache<'a, En> {
         &mut self,
         graph: &mut Graph<En::Arg>,
         mut seed_deps: BTreeSet<Hash>,
-        ev: Event<En::Arg>,
+        mut ev: Event<En::Arg>,
     ) -> Result<Option<Hash>, WorkCacheError<En::Error>> {
+        ev.deps.clear();
         // check `ev` for independence
         #[derive(Clone, Copy, PartialEq)]
         enum DepSt {
@@ -181,7 +182,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                     continue;
                 }
                 // calculate base state = cur - conc
-                let (base_st, _) = self.run_foreach_recursively(
+                let (base_st, tmptt) = self.run_foreach_recursively(
                     graph,
                     seed_deps
                         .iter()
@@ -203,6 +204,15 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                         })
                         .collect(),
                 )?;
+                if tmptt.contains(&conc_evid) {
+                    // if some other dependency pulls in this,
+                    // then skip it for now, as it will be added
+                    // to the next seed if necessary
+                    // TODO: add a unit test for this
+                    #[cfg(feature = "tracing")]
+                    event!(Level::TRACE, "{} is pulled in multiple times, skip", conc_evid);
+                    continue;
+                }
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
                 #[allow(clippy::if_same_then_else)]
                 let is_indep = if &cur_st == base_st {
@@ -218,14 +228,24 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                     event!(Level::TRACE, "{} is non-idempotent", conc_evid);
                     false
                 } else {
-                    engine
+                    let evfirst = engine
                         .run_event_bare(ev.cmd, &ev.arg, base_st)
                         .and_then(|next_st| {
                             self.engine
                                 .run_event_bare(conc_ev.cmd, &conc_ev.arg, &next_st)
                         })
-                        .map_err(WorkCacheError::Engine)?
-                        == cur_st
+                        .map_err(WorkCacheError::Engine)?;
+                    let res = evfirst == cur_st;
+                    #[cfg(feature = "tracing")]
+                    if !res {
+                        event!(
+                            Level::TRACE,
+                            "cur_st={:?} vs. evfirst={:?}",
+                            cur_st,
+                            evfirst
+                        );
+                    }
+                    res
                 };
                 #[cfg(feature = "tracing")]
                 event!(
@@ -274,12 +294,28 @@ impl<'a, En: Engine> WorkCache<'a, En> {
     where
         En::Arg: Clone,
     {
+        // TODO: make this more effective
+
         let mut seed_deps: BTreeSet<_> = graph
-            .fold_state(sts.iter().map(|&h| (h, false)).collect(), false)?
+            .calculate_dependencies(
+                Default::default(),
+                sts.iter()
+                    .map(|&h| (h, IncludeSpec::IncludeOnlyDeps))
+                    .collect(),
+            )?
+            .into_iter()
+            .collect();
+
+        seed_deps = graph
+            .fold_state(seed_deps.into_iter().map(|h| (h, false)).collect(), false)?
             .into_iter()
             .map(|(h, _)| h)
             .collect();
+
         for i in sts {
+            if seed_deps.contains(&i) {
+                continue;
+            }
             let ev = graph.events[&i].clone();
             if let Some(ih) = self.shelve_event(graph, seed_deps.clone(), ev)? {
                 if ih != i {
@@ -359,19 +395,21 @@ mod tests {
         assert_eq!(*got, expected);
     }
 
-    fn assert_no_reorder(start: &str, sears: Vec<SearEvent<'static>>) {
+    fn optional_tracing(f: impl FnOnce()) {
         #[cfg(feature = "tracing")]
         tracing::subscriber::with_default(
             tracing_subscriber::fmt()
                 .with_max_level(tracing::Level::TRACE)
                 .with_writer(std::io::stderr)
                 .finish(),
-            || {
-                assert_no_reorder_inner(start, sears);
-            },
+            f,
         );
         #[cfg(not(feature = "tracing"))]
-        assert_no_reorder_inner(start, sears);
+        f();
+    }
+
+    fn assert_no_reorder(start: &str, sears: Vec<SearEvent<'static>>) {
+        optional_tracing(|| assert_no_reorder_inner(start, sears))
     }
 
     #[test]
@@ -411,6 +449,77 @@ mod tests {
                 SearEvent("xa", ""),
                 SearEvent("a", "bbbbb"),
             ],
+        );
+    }
+
+    fn assert_simple_merge(
+        start: &str,
+        dest: &str,
+        common_sears: Vec<SearEvent<'static>>,
+        tomerge_sears: Vec<SearEvent<'static>>,
+    ) {
+        let e = SearEngine;
+        let mut g = Graph::default();
+        let mut w = WorkCache::new(&e, start.to_string());
+        let mut xs = BTreeSet::new();
+        for i in common_sears {
+            let x = w
+                .shelve_event(&mut g, xs.clone(), i.into())
+                .unwrap()
+                .unwrap();
+            xs.insert(x);
+        }
+        let oldxs = xs.clone();
+        for i in tomerge_sears {
+            let x = w
+                .shelve_event(&mut g, oldxs.clone(), i.into())
+                .unwrap()
+                .unwrap();
+            xs.insert(x);
+        }
+        let _ = oldxs;
+
+        w.try_merge(&mut g, xs.clone()).expect("merge failed");
+
+        assert_eq!(
+            w.run_foreach_recursively(
+                &g,
+                xs.into_iter()
+                    .map(|h| (h, IncludeSpec::IncludeAll))
+                    .collect()
+            )
+            .expect("unable to compute final result")
+            .0,
+            dest
+        );
+    }
+
+    #[test]
+    fn basic_merge() {
+        assert_simple_merge(
+            "A|B|C",
+            "E|D|F",
+            vec![SearEvent("B", "D")],
+            vec![SearEvent("A|D", "E|D"), SearEvent("D|C", "D|F")],
+        );
+    }
+
+    #[test]
+    fn merge2() {
+        assert_simple_merge(
+            "XXXX",
+            r#"fn main() {
+    println!("Hewwo UwU!");
+    println!("Hello World!");
+}"#,
+            vec![SearEvent(
+                "XXXX",
+                r#"fn main() {
+    println!("Hewwo!");
+    println!("Hello Wrold!");
+}"#,
+            )],
+            vec![SearEvent("o!", "o UwU!"), SearEvent("Wrold", "World")],
         );
     }
 }

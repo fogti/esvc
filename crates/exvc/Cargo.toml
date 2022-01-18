@@ -18,6 +18,17 @@ syntect = "4.6"
 version = "0.1"
 path = "../esvc-core"
 
+[dependencies.tracing]
+version = "0.1"
+optional = true
+
+[dependencies.tracing-subscriber]
+version = "0.3"
+optional = true
+
 [dependencies.zstd]
 version = "0.9"
 default-features = false
+
+[features]
+tracing_ = ["tracing", "tracing-subscriber", "esvc-core/tracing"]
