@@ -80,7 +80,11 @@ impl Context<'_> {
                     .and_then(|p| p.extension())
                     .and_then(|ext| self.ps.find_syntax_by_extension(ext))
                 {
-                    let mut h = HighlightLines::new(syntax, &self.ts.themes["base16-mocha.dark"]);
+                    let mut h = HighlightLines::new(
+                        syntax,
+                        &self.ts.themes[core::option_env!("EXVC_DEFAULT_THEME")
+                            .unwrap_or("base16-mocha.dark")],
+                    );
                     for (lines, dosmth) in it {
                         for line in lines {
                             // the highlighting needs to be kept in sync
@@ -218,6 +222,16 @@ fn main() -> anyhow::Result<()> {
         w: WorkCache::new(&e, vec![]),
     };
     ctx.path = arg.map(Into::into);
+
+    {
+        let dfl_thpath: Option<&'static str> = core::option_env!("EXVC_DFL_THEME_PATH");
+        if let Some(x) = dfl_thpath {
+            let themename: Option<&'static str> = core::option_env!("EXVC_DEFAULT_THEME");
+            let mut theme = ThemeSet::get_theme(x)?;
+            theme.settings.background = Some(syntect::highlighting::Color::BLACK);
+            ctx.ts.themes.insert(themename.unwrap().to_string(), theme);
+        }
+    }
 
     let is_atty = atty::is(atty::Stream::Stdin) && atty::is(atty::Stream::Stdout);
     let mut stdout = std::io::stdout();
