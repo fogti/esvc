@@ -67,58 +67,38 @@ impl<'a, En: Engine> WorkCache<'a, En> {
         main_evid: Hash,
         incl: IncludeSpec,
     ) -> RunResult<'_, En> {
-        // heap of necessary dependencies
-        let mut deps = vec![main_evid];
-
+        let deps = graph
+            .calculate_dependencies(tt.clone(), core::iter::once((main_evid, incl)).collect())?;
         let mut data: En::Dat = (*self.sts.get(&tt).ok_or(GraphError::DatasetNotFound)?).clone();
 
-        while let Some(evid) = deps.pop() {
-            if tt.contains(&evid) {
-                // nothing to do
-                continue;
-            } else if evid == main_evid && !deps.is_empty() {
-                return Err(GraphError::DependencyCircuit(main_evid).into());
-            }
-
+        for &evid in &deps {
             let evwd = graph
                 .events
                 .get(&evid)
                 .ok_or(GraphError::DependencyNotFound(evid))?;
-            let mut necessary_deps = evwd.deps.difference(&tt);
-            if let Some(&x) = necessary_deps.next() {
-                deps.push(evid);
-                // TODO: check for dependency cycles
-                deps.push(x);
-                deps.extend(necessary_deps.copied());
-            } else {
-                if evid == main_evid && incl != IncludeSpec::IncludeAll {
-                    // we want to omit the final dep
-                    break;
-                }
 
-                // run the item, all dependencies are satisfied
-                use std::collections::btree_map::Entry;
-                // TODO: check if `data...clone()` is a bottleneck.
-                match self.sts.entry({
-                    let mut tmp = tt.clone();
-                    tmp.insert(evid);
-                    tmp
-                }) {
-                    Entry::Occupied(o) => {
-                        // reuse cached entry
-                        data = o.get().clone();
-                    }
-                    Entry::Vacant(v) => {
-                        // create cache entry
-                        data = self
-                            .engine
-                            .run_event_bare(evwd.cmd, &evwd.arg, &data)
-                            .map_err(WorkCacheError::Engine)?;
-                        v.insert(data.clone());
-                    }
+            // run the item, all dependencies are satisfied
+            use std::collections::btree_map::Entry;
+            // TODO: check if `data...clone()` is a bottleneck.
+            match self.sts.entry({
+                let mut tmp = tt.clone();
+                tmp.insert(evid);
+                tmp
+            }) {
+                Entry::Occupied(o) => {
+                    // reuse cached entry
+                    data = o.get().clone();
                 }
-                tt.insert(evid);
+                Entry::Vacant(v) => {
+                    // create cache entry
+                    data = self
+                        .engine
+                        .run_event_bare(evwd.cmd, &evwd.arg, &data)
+                        .map_err(WorkCacheError::Engine)?;
+                    v.insert(data.clone());
+                }
             }
+            tt.insert(evid);
         }
 
         let res = self.sts.get(&tt).unwrap();

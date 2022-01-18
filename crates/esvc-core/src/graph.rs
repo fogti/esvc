@@ -91,13 +91,15 @@ impl<Arg: Serialize> Graph<Arg> {
 
     pub fn calculate_dependencies(
         &self,
+        mut tt: BTreeSet<Hash>,
         evids: BTreeMap<Hash, IncludeSpec>,
     ) -> Result<Vec<Hash>, GraphError> {
-        let mut tt = BTreeSet::new();
         let mut ret = Vec::new();
+
+        // heap of necessary dependencies
         let mut deps = Vec::new();
+
         for (main_evid, incl) in evids {
-            // heap of necessary dependencies
             deps.push(main_evid);
 
             while let Some(evid) = deps.pop() {

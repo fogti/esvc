@@ -122,7 +122,7 @@ fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
                 esvc_core::print_deps(
                     &mut std::io::stdout(),
                     ">> ",
-                    g.calculate_dependencies(evs).unwrap().into_iter(),
+                    g.calculate_dependencies(BTreeSet::new(), evs).unwrap().into_iter(),
                 )
                 .unwrap();
 
