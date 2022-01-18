@@ -64,16 +64,13 @@ impl<'a, En: Engine> WorkCache<'a, En> {
         Self { engine, sts }
     }
 
-    /// this returns an error if `tt` is not present in `sts`.
-    pub fn run_recursively(
+    /// invariant: `deps` and `tt` are distinct
+    fn run_deps(
         &mut self,
         graph: &Graph<En::Arg>,
         mut tt: BTreeSet<Hash>,
-        main_evid: Hash,
-        incl: IncludeSpec,
+        deps: Vec<Hash>,
     ) -> RunResult<'_, En> {
-        let deps = graph
-            .calculate_dependencies(tt.clone(), core::iter::once((main_evid, incl)).collect())?;
         let mut data: En::Dat = (*self.sts.get(&tt).ok_or(GraphError::DatasetNotFound)?).clone();
 
         for &evid in &deps {
@@ -115,14 +112,8 @@ impl<'a, En: Engine> WorkCache<'a, En> {
         graph: &Graph<En::Arg>,
         evids: BTreeMap<Hash, IncludeSpec>,
     ) -> RunResult<'_, En> {
-        let tt = evids
-            .into_iter()
-            .try_fold(BTreeSet::new(), |tt, (i, idspec)| {
-                self.run_recursively(graph, tt, i, idspec)
-                    .map(|(_, new_tt)| new_tt)
-            })?;
-        let res = self.sts.get(&tt).unwrap();
-        Ok((res, tt))
+        let deps = graph.calculate_dependencies(Default::default(), evids)?;
+        self.run_deps(graph, Default::default(), deps)
     }
 
     /// NOTE: this ignores the contents of `ev.deps`
