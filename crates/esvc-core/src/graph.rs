@@ -89,8 +89,7 @@ impl<Arg: Serialize> Graph<Arg> {
         Some(st)
     }
 
-    /// utility function for debugging of incorrect evaluation orders
-    pub fn debug_exec_order(
+    pub fn calculate_dependencies(
         &self,
         evids: BTreeMap<Hash, IncludeSpec>,
     ) -> Result<Vec<Hash>, GraphError> {
