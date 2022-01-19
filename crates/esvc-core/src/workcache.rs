@@ -117,7 +117,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
     }
 
     /// NOTE: this ignores the contents of `ev.deps`
-    #[cfg_attr(feature = "tracing", tracing::instrument)]
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(seed_deps)))]
     pub fn shelve_event(
         &mut self,
         graph: &mut Graph<En::Arg>,
@@ -135,19 +135,31 @@ impl<'a, En: Engine> WorkCache<'a, En> {
         let engine = self.engine;
 
         while !seed_deps.is_empty() {
-            let mut new_seed_deps = BTreeSet::new();
+            let mut new_seed_deps = BTreeSet::<Hash>::new();
+
+            #[cfg(feature = "tracing")]
+            let trc_span = tracing::span!(Level::DEBUG, "fe-seeds", ?seed_deps);
+
+            #[cfg(feature = "tracing")]
+            let _enter = trc_span.enter();
+
+            seed_deps = seed_deps
+                .into_iter()
+                .filter(|conc_evid| !cur_deps.contains_key(conc_evid))
+                .collect();
+
             // calculate cur state
             let (base_st, _base_tt) = self.run_foreach_recursively(
                 graph,
                 seed_deps
                     .iter()
+                    .filter(|&i| cur_deps.get(i) != Some(&DepSt::Deny))
                     .chain(
                         cur_deps
                             .iter()
                             .filter(|&(_, &s)| s == DepSt::Use)
                             .map(|(h, _)| h),
                     )
-                    .filter(|i| cur_deps.get(i) != Some(&DepSt::Deny))
                     .map(|&i| (i, IncludeSpec::IncludeAll))
                     .collect(),
             )?;
@@ -169,46 +181,66 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                 return Ok(None);
             }
 
-            for &conc_evid in &seed_deps {
-                if cur_deps.contains_key(&conc_evid) {
-                    continue;
-                }
-                // calculate base state = cur - conc
-                let (base_st, tmptt) = self.run_foreach_recursively(
-                    graph,
-                    seed_deps
-                        .iter()
-                        .chain(
-                            cur_deps
+            let seed_deps2 = seed_deps
+                .iter()
+                .map(|&conc_evid| {
+                    Ok((
+                        conc_evid,
+                        // calculate base state = cur - conc
+                        self.run_foreach_recursively(
+                            graph,
+                            seed_deps
                                 .iter()
-                                .filter(|&(_, s)| s == &DepSt::Use)
-                                .map(|(h, _)| h),
-                        )
-                        .map(|&i| {
-                            (
-                                i,
-                                if i == conc_evid {
-                                    IncludeSpec::IncludeOnlyDeps
-                                } else {
-                                    IncludeSpec::IncludeAll
-                                },
-                            )
-                        })
-                        .collect(),
-                )?;
-                if tmptt.contains(&conc_evid) {
-                    // if some other dependency pulls in this,
-                    // then skip it for now, as it will be added
-                    // to the next seed if necessary
-                    // TODO: add a unit test for this
-                    #[cfg(feature = "tracing")]
-                    event!(
-                        Level::TRACE,
-                        "{} is pulled in multiple times, skip",
-                        conc_evid
-                    );
-                    continue;
-                }
+                                .chain(
+                                    cur_deps
+                                        .iter()
+                                        .filter(|&(_, s)| s == &DepSt::Use)
+                                        .map(|(h, _)| h),
+                                )
+                                .map(|&i| {
+                                    (
+                                        i,
+                                        if i == conc_evid {
+                                            IncludeSpec::IncludeOnlyDeps
+                                        } else {
+                                            IncludeSpec::IncludeAll
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        )?
+                        .1,
+                    ))
+                })
+                .filter(|maybe_stuff| {
+                    match maybe_stuff {
+                        Ok((conc_evid, tmptt)) => {
+                            if tmptt.contains(conc_evid) {
+                                // if some other dependency pulls in this,
+                                // then skip it for now, as it will be added
+                                // to the next seed if necessary
+                                // TODO: add a unit test for this
+                                #[cfg(feature = "tracing")]
+                                event!(
+                                    Level::TRACE,
+                                    "{} is pulled in multiple times, skip",
+                                    conc_evid
+                                );
+                                // to make sure that we don't accidentially hit the
+                                // 'necessary dep got lost' if the dependee gets dropped.
+                                new_seed_deps.insert(*conc_evid);
+                                false
+                            } else {
+                                true
+                            }
+                        }
+                        Err(_) => true,
+                    }
+                })
+                .collect::<Result<BTreeMap<_, _>, WorkCacheError<_>>>()?;
+
+            for (conc_evid, tmptt) in seed_deps2 {
+                let base_st = self.sts.get(&tmptt).unwrap();
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
                 #[allow(clippy::if_same_then_else)]
                 let is_indep = if &cur_st == base_st {
@@ -227,8 +259,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                     let evfirst = engine
                         .run_event_bare(ev.cmd, &ev.arg, base_st)
                         .and_then(|next_st| {
-                            self.engine
-                                .run_event_bare(conc_ev.cmd, &conc_ev.arg, &next_st)
+                            engine.run_event_bare(conc_ev.cmd, &conc_ev.arg, &next_st)
                         })
                         .map_err(WorkCacheError::Engine)?;
                     let res = evfirst == cur_st;
@@ -260,7 +291,58 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                     cur_deps.extend(conc_ev.deps.iter().map(|&dep| (dep, DepSt::Deny)));
                 }
             }
-            seed_deps = new_seed_deps;
+
+            // check if we haven't missed any essential dependency
+            let (bare_st, bare_tt) = self.run_foreach_recursively(
+                graph,
+                new_seed_deps
+                    .iter()
+                    .filter(|&i| cur_deps.get(i) != Some(&DepSt::Deny))
+                    .chain(
+                        cur_deps
+                            .iter()
+                            .filter(|&(_, &s)| s == DepSt::Use)
+                            .map(|(h, _)| h),
+                    )
+                    .map(|&i| (i, IncludeSpec::IncludeAll))
+                    .collect(),
+            )?;
+            let mut tmp_st = engine
+                .run_event_bare(ev.cmd, &ev.arg, bare_st)
+                .map_err(WorkCacheError::Engine)?;
+            seed_deps = seed_deps.difference(&bare_tt).copied().collect();
+            for &conc_evid in &seed_deps {
+                let conc_ev = graph.events.get(&conc_evid).unwrap();
+                tmp_st = engine
+                    .run_event_bare(conc_ev.cmd, &conc_ev.arg, &tmp_st)
+                    .map_err(WorkCacheError::Engine)?;
+            }
+            if cur_st != tmp_st {
+                // some necessary dependency got lost
+                // to avoid any dependency on concrete hash value ordering or such here,
+                // just simply add all current seed deps to the necessary set
+                // we can avoid entry juggling here because all entries might end up as `deny`
+                // should be already present in `bare_tt` and thus already filtered.
+                #[cfg(feature = "tracing")]
+                event!(
+                    Level::TRACE,
+                    ?bare_tt,
+                    bare_st = ?(*self.sts.get(&bare_tt).unwrap()),
+                    ?cur_st,
+                    ?tmp_st,
+                    ?seed_deps,
+                    "some necessary dependency got lost, stopping here",
+                );
+                assert!(cur_deps
+                    .iter()
+                    .filter(|&(_, &s)| s == DepSt::Deny)
+                    .all(|(h, _)| !seed_deps.contains(h)));
+                cur_deps.extend(seed_deps.into_iter().map(|h| (h, DepSt::Use)));
+                break;
+            } else {
+                // reduction successful
+                seed_deps = new_seed_deps;
+            }
         }
 
         // mangle deps
@@ -494,40 +576,46 @@ mod tests {
         common_sears: Vec<SearEvent<'static>>,
         tomerge_sears: Vec<SearEvent<'static>>,
     ) {
-        let e = SearEngine;
-        let mut g = Graph::default();
-        let mut w = WorkCache::new(&e, start.to_string());
-        let mut xs = BTreeSet::new();
-        for i in common_sears {
-            let x = w
-                .shelve_event(&mut g, xs.clone(), i.into())
-                .unwrap()
-                .unwrap();
-            xs.insert(x);
-        }
-        let oldxs = xs.clone();
-        for i in tomerge_sears {
-            let x = w
-                .shelve_event(&mut g, oldxs.clone(), i.into())
-                .unwrap()
-                .unwrap();
-            xs.insert(x);
-        }
-        let _ = oldxs;
+        optional_tracing(|| {
+            let e = SearEngine;
+            let mut g = Graph::default();
+            let mut w = WorkCache::new(&e, start.to_string());
+            let mut xs = BTreeSet::new();
+            for i in common_sears {
+                let x = w
+                    .shelve_event(&mut g, xs.clone(), i.into())
+                    .unwrap()
+                    .unwrap();
+                xs.insert(x);
+            }
+            let oldxs = xs.clone();
+            for i in tomerge_sears {
+                let x = w
+                    .shelve_event(&mut g, oldxs.clone(), i.into())
+                    .unwrap()
+                    .unwrap();
+                xs.insert(x);
+            }
+            let _ = oldxs;
 
-        w.try_merge(&mut g, xs.clone()).expect("merge failed");
+            if let Err(e) = w.try_merge(&mut g, xs.clone()) {
+                #[cfg(feature = "tracing")]
+                event!(Level::TRACE, ?w, ?g, "state after try_merge",);
+                panic!("merge failed: {:?}", e);
+            }
 
-        assert_eq!(
-            w.run_foreach_recursively(
-                &g,
-                xs.into_iter()
-                    .map(|h| (h, IncludeSpec::IncludeAll))
-                    .collect()
-            )
-            .expect("unable to compute final result")
-            .0,
-            dest
-        );
+            assert_eq!(
+                w.run_foreach_recursively(
+                    &g,
+                    xs.into_iter()
+                        .map(|h| (h, IncludeSpec::IncludeAll))
+                        .collect()
+                )
+                .expect("unable to compute final result")
+                .0,
+                dest
+            );
+        });
     }
 
     #[test]
