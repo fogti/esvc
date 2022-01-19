@@ -459,7 +459,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                         .iter()
                         .filter(|(_, is_hard)| **is_hard)
                         .collect::<Vec<_>>()
-                        != ev
+                        == ev
                             .deps
                             .iter()
                             .filter(|(_, is_hard)| **is_hard)
