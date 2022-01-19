@@ -9,6 +9,14 @@ use core::fmt::{self, Formatter, Result, Write};
 /// useful for debugging and visualization
 pub struct Dot<'a, Arg>(pub &'a Graph<Arg>);
 
+fn bool2hs(x: bool) -> &'static str {
+    if x {
+        "hard"
+    } else {
+        "soft"
+    }
+}
+
 impl<Arg> Dot<'_, Arg> {
     fn graph_fmt<AF>(&self, f: &mut Formatter<'_>, argfmtf: AF) -> Result
     where
@@ -29,8 +37,14 @@ impl<Arg> Dot<'_, Arg> {
 
         // edges
         for (h, i) in &self.0.events {
-            for dep in &i.deps {
-                writeln!(f, "  \"{}\" -> \"{}\";", h, dep)?;
+            for (dep, &is_hard) in &i.deps {
+                writeln!(
+                    f,
+                    "  \"{}\" -> \"{}\" [label=\"{}\"];",
+                    h,
+                    dep,
+                    bool2hs(is_hard)
+                )?;
             }
         }
 

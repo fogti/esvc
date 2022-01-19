@@ -129,6 +129,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
         #[derive(Clone, Copy, PartialEq)]
         enum DepSt {
             Use,
+            UseSoft,
             Deny,
         }
         let mut cur_deps = BTreeMap::new();
@@ -270,7 +271,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
             for (conc_evid, tmptt) in seed_deps2 {
                 let base_st = self.sts.get(&tmptt).unwrap();
                 let conc_ev = graph.events.get(&conc_evid).unwrap();
-                #[allow(clippy::if_same_then_else)]
+                #[allow(clippy::if_same_then_else, clippy::let_and_return)]
                 let is_indep = if &cur_st == base_st {
                     // this is a revert
                     #[cfg(feature = "tracing")]
@@ -313,16 +314,21 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                 );
                 if is_indep {
                     // independent -> move backward
-                    new_seed_deps.extend(conc_ev.deps.iter().copied());
+                    new_seed_deps.extend(conc_ev.deps.keys().copied());
                 } else {
                     // not independent -> move forward
                     // make sure that we don't overwrite `deny` entries
                     cur_deps.entry(conc_evid).or_insert(DepSt::Use);
-                    cur_deps.extend(conc_ev.deps.iter().map(|&dep| (dep, DepSt::Deny)));
+                    cur_deps.extend(
+                        conc_ev
+                            .deps
+                            .iter()
+                            .filter(|(_, &is_hard)| is_hard)
+                            .map(|(&dep, _)| (dep, DepSt::Deny)),
+                    );
                 }
             }
 
-            // make sure
             if extra_new_seed_deps != seed_deps {
                 new_seed_deps.extend(extra_new_seed_deps);
             } else {
@@ -377,9 +383,9 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                 );
                 assert!(cur_deps
                     .iter()
-                    .filter(|&(_, &s)| s == DepSt::Deny)
+                    .filter(|&(_, &s)| matches!(s, DepSt::Deny | DepSt::Use))
                     .all(|(h, _)| !seed_deps.contains(h)));
-                cur_deps.extend(seed_deps.into_iter().map(|h| (h, DepSt::Use)));
+                cur_deps.extend(seed_deps.into_iter().map(|h| (h, DepSt::UseSoft)));
                 break;
             } else {
                 // reduction successful
@@ -393,7 +399,11 @@ impl<'a, En: Engine> WorkCache<'a, En> {
             arg: ev.arg,
             deps: cur_deps
                 .into_iter()
-                .flat_map(|(dep, st)| if st == DepSt::Use { Some(dep) } else { None })
+                .flat_map(|(dep, st)| match st {
+                    DepSt::Use => Some((dep, true)),
+                    DepSt::UseSoft => Some((dep, false)),
+                    DepSt::Deny => None,
+                })
                 .collect(),
         };
 
@@ -442,9 +452,25 @@ impl<'a, En: Engine> WorkCache<'a, En> {
             let ev = graph.events[&i].clone();
             if let Some(ih) = self.shelve_event(graph, seed_deps.clone(), ev)? {
                 if ih != i {
-                    return Err(WorkCacheError::HashChangeAtMerge(i, ih));
+                    let ev = graph.events[&i].clone();
+                    let nev = graph.events[&ih].clone();
+                    if nev
+                        .deps
+                        .iter()
+                        .filter(|(_, is_hard)| **is_hard)
+                        .collect::<Vec<_>>()
+                        != ev
+                            .deps
+                            .iter()
+                            .filter(|(_, is_hard)| **is_hard)
+                            .collect::<Vec<_>>()
+                    {
+                        // carry on, only soft deps changed.
+                    } else {
+                        return Err(WorkCacheError::HashChangeAtMerge(i, ih));
+                    }
                 }
-                seed_deps.insert(ih);
+                seed_deps.insert(i);
             } else {
                 return Err(WorkCacheError::NoopAtMerge(i));
             }
@@ -700,10 +726,7 @@ mod tests {
             let mut w = WorkCache::new(&e, "X".to_string());
             let mut xs = BTreeSet::new();
             let mut xsv = Vec::new();
-            for i in [
-                SearEvent("X", "XXX"),
-                SearEvent("X", ""),
-            ] {
+            for i in [SearEvent("X", "XXX"), SearEvent("X", "")] {
                 let x = w
                     .shelve_event(&mut g, xs.clone(), i.into())
                     .unwrap()

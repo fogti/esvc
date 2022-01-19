@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Event<Arg> {
     pub cmd: u32,
     pub arg: Arg,
-    pub deps: BTreeSet<Hash>,
+    /// evid -> is_hard (hard = unambiguous, soft = ambiguous)
+    pub deps: BTreeMap<Hash, bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,7 +65,7 @@ impl<Arg: Serialize> Graph<Arg> {
             let orig_len = st.len();
             for (h, _) in st.clone() {
                 match self.events.get(&h) {
-                    Some(x) => st.extend(x.deps.iter().map(|&j| (j, true))),
+                    Some(x) => st.extend(x.deps.iter().map(|(&j, _)| (j, true))),
                     None => {
                         return Err(GraphError::DependencyNotFound(h));
                     }
@@ -106,7 +107,7 @@ impl<Arg: Serialize> Graph<Arg> {
                     .events
                     .get(&evid)
                     .ok_or(GraphError::DependencyNotFound(evid))?;
-                let mut necessary_deps = evwd.deps.difference(&tt);
+                let mut necessary_deps = evwd.deps.keys().filter(|&h| !tt.contains(h));
                 if let Some(&x) = necessary_deps.next() {
                     deps.push(evid);
                     // TODO: check for dependency cycles

@@ -105,7 +105,7 @@ fn main__(data: (NonEmptyString, SearEvent, Vec<SearEvent>)) {
         println!(":: e.graph.events[] ::");
         for (h, ev) in &g.events {
             println!("{} {:?}", h, ev.arg);
-            esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
+            esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.keys().copied()).unwrap();
             println!();
         }
 
@@ -127,7 +127,7 @@ fn main__(data: (NonEmptyString, SearEvent, Vec<SearEvent>)) {
         println!(":: e.graph.events[] ::");
         for (h, ev) in &g.events {
             println!("{} {:?}", h, ev.arg);
-            esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
+            esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.keys().copied()).unwrap();
             println!();
         }
         panic!("{:?}", e);
