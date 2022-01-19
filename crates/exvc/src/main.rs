@@ -37,11 +37,9 @@ impl Context<'_> {
             print!("{}", esvc_core::Dot(&self.g));
             true
         } else if line == "*state" {
-            esvc_core::print_deps(
-                &mut std::io::stdout(),
-                &format!("{} ", Colour::Blue.paint(">>"),),
-                self.g.nstates[""].iter().copied(),
-            )?;
+            for h in &self.g.nstates[""] {
+                println!("{} {}", Colour::Blue.paint(">>"), h);
+            }
             true
         } else if line == "w" {
             if let Some(path) = &self.path {

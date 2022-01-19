@@ -58,13 +58,17 @@ fn main() {
     );
 
     println!(":: x ::");
-    esvc_core::print_deps(&mut std::io::stdout(), ">> ", xs.iter().copied()).unwrap();
+    for i in &xs {
+        println!("{}", i);
+    }
     println!();
 
     println!(":: e.graph.events[] ::");
     for (h, ev) in &g.events {
         println!("{} {}", h, from_utf8(&ev.arg[..]).unwrap());
-        esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
+        for (i, &is_hard) in &ev.deps {
+            println!(">> {} ({})", i, if is_hard { "hard" } else { "soft" });
+        }
         println!();
     }
 
@@ -78,7 +82,9 @@ fn main() {
         .into_iter()
         .map(|x| x.0)
         .collect();
-    esvc_core::print_deps(&mut std::io::stdout(), "", minx.iter().copied()).unwrap();
+    for i in &minx {
+        println!("{}", i);
+    }
     println!();
 
     println!(":: applied ::");

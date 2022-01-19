@@ -105,19 +105,18 @@ fn main__(data: (NonEmptyString, SearEvent, Vec<SearEvent>)) {
         println!(":: e.graph.events[] ::");
         for (h, ev) in &g.events {
             println!("{} {:?}", h, ev.arg);
-            esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.keys().copied()).unwrap();
+            for (i, &is_hard) in &ev.deps {
+                println!(">> {} ({})", i, if is_hard { "hard" } else { "soft" });
+            }
             println!();
         }
 
         println!("exec order ::");
-        esvc_core::print_deps(
-            &mut std::io::stdout(),
-            ">> ",
-            g.calculate_dependencies(BTreeSet::new(), evs)
+        for i in g.calculate_dependencies(BTreeSet::new(), evs)
                 .unwrap()
-                .into_iter(),
-        )
-        .unwrap();
+        {
+            println!(">> {}", i);
+        }
 
         panic!("results mismatch");
     }
@@ -127,7 +126,9 @@ fn main__(data: (NonEmptyString, SearEvent, Vec<SearEvent>)) {
         println!(":: e.graph.events[] ::");
         for (h, ev) in &g.events {
             println!("{} {:?}", h, ev.arg);
-            esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.keys().copied()).unwrap();
+            for (i, &is_hard) in &ev.deps {
+                println!(">> {} ({})", i, if is_hard { "hard" } else { "soft" });
+            }
             println!();
         }
         panic!("{:?}", e);

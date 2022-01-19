@@ -153,14 +153,3 @@ impl<Arg> Graph<Arg> {
         )
     }
 }
-
-pub fn print_deps<W, DI>(w: &mut W, pfx: &str, deps: DI) -> std::io::Result<()>
-where
-    DI: Iterator<Item = Hash>,
-    W: std::io::Write,
-{
-    for i in deps {
-        writeln!(w, "{}{}", pfx, i)?;
-    }
-    Ok(())
-}
