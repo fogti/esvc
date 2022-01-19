@@ -134,6 +134,23 @@ impl<'a, En: Engine> WorkCache<'a, En> {
         let mut cur_deps = BTreeMap::new();
         let engine = self.engine;
 
+        // calculate expected state
+        let (base_st, _base_tt) = self.run_foreach_recursively(
+            graph,
+            seed_deps
+                .iter()
+                .map(|&i| (i, IncludeSpec::IncludeAll))
+                .collect(),
+        )?;
+        let cur_st = engine
+            .run_event_bare(ev.cmd, &ev.arg, base_st)
+            .map_err(WorkCacheError::Engine)?;
+
+        if cur_deps.is_empty() && base_st == &cur_st {
+            // this is a no-op event, we can't handle it anyways.
+            return Ok(None);
+        }
+
         while !seed_deps.is_empty() {
             let mut new_seed_deps = BTreeSet::<Hash>::new();
 
@@ -659,5 +676,85 @@ mod tests {
             )],
             vec![SearEvent("o!", "o UwU!"), SearEvent("Wrold", "World")],
         );
+    }
+
+    #[test]
+    fn merge_after_clear() {
+        optional_tracing(|| {
+            let e = SearEngine;
+            let mut g = Graph::default();
+            let mut w = WorkCache::new(&e, "X".to_string());
+            let mut xs = BTreeSet::new();
+            let mut xsv = Vec::new();
+            for i in [
+                SearEvent("X", "XXX"),
+                SearEvent("X", ""),
+            ] {
+                let x = w
+                    .shelve_event(&mut g, xs.clone(), i.into())
+                    .unwrap()
+                    .unwrap();
+                xs.insert(x);
+                xsv.push(x);
+            }
+
+            if let Err(e) = w.try_merge(&mut g, xs.clone()) {
+                #[cfg(feature = "tracing")]
+                event!(Level::TRACE, ?w, ?g, "state after try_merge",);
+                panic!("merge failed: {:?}", e);
+            }
+
+            assert_eq!(
+                w.run_foreach_recursively(
+                    &g,
+                    xs.into_iter()
+                        .map(|h| (h, IncludeSpec::IncludeAll))
+                        .collect()
+                )
+                .expect("unable to compute final result")
+                .0,
+                ""
+            );
+        });
+    }
+
+    #[test]
+    fn merge_after_clear2() {
+        optional_tracing(|| {
+            let e = SearEngine;
+            let mut g = Graph::default();
+            let mut w = WorkCache::new(&e, "\0".to_string());
+            let mut xs = BTreeSet::new();
+            let mut xsv = Vec::new();
+            for i in [
+                SearEvent("\0", "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"),
+                SearEvent("\0", ""),
+            ] {
+                let x = w
+                    .shelve_event(&mut g, xs.clone(), i.into())
+                    .unwrap()
+                    .unwrap();
+                xs.insert(x);
+                xsv.push(x);
+            }
+
+            if let Err(e) = w.try_merge(&mut g, xs.clone()) {
+                #[cfg(feature = "tracing")]
+                event!(Level::TRACE, ?w, ?g, "state after try_merge",);
+                panic!("merge failed: {:?}", e);
+            }
+
+            assert_eq!(
+                w.run_foreach_recursively(
+                    &g,
+                    xs.into_iter()
+                        .map(|h| (h, IncludeSpec::IncludeAll))
+                        .collect()
+                )
+                .expect("unable to compute final result")
+                .0,
+                ""
+            );
+        });
     }
 }

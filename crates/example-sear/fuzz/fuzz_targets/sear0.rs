@@ -121,6 +121,17 @@ fn main__(data: (NonEmptyString, SearEvent, Vec<SearEvent>)) {
 
         panic!("results mismatch");
     }
+
+    // make sure merging always works
+    if let Err(e) = w.try_merge(&mut g, tt) {
+        println!(":: e.graph.events[] ::");
+        for (h, ev) in &g.events {
+            println!("{} {:?}", h, ev.arg);
+            esvc_core::print_deps(&mut std::io::stdout(), ">> ", ev.deps.iter().copied()).unwrap();
+            println!();
+        }
+        panic!("{:?}", e);
+    }
 }
 
 fuzz_target!(|data: (NonEmptyString, SearEvent, Vec<SearEvent>)| {
