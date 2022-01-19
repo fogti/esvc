@@ -167,6 +167,8 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                 .run_event_bare(ev.cmd, &ev.arg, base_st)
                 .map_err(WorkCacheError::Engine)?;
 
+            let mut extra_new_seed_deps = BTreeSet::new();
+
             #[cfg(feature = "tracing")]
             event!(
                 Level::TRACE,
@@ -228,7 +230,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                                 );
                                 // to make sure that we don't accidentially hit the
                                 // 'necessary dep got lost' if the dependee gets dropped.
-                                new_seed_deps.insert(*conc_evid);
+                                extra_new_seed_deps.insert(*conc_evid);
                                 false
                             } else {
                                 true
@@ -290,6 +292,18 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                     cur_deps.entry(conc_evid).or_insert(DepSt::Use);
                     cur_deps.extend(conc_ev.deps.iter().map(|&dep| (dep, DepSt::Deny)));
                 }
+            }
+
+            // make sure
+            if extra_new_seed_deps != seed_deps {
+                new_seed_deps.extend(extra_new_seed_deps);
+            } else {
+                #[cfg(feature = "tracing")]
+                event!(
+                    Level::TRACE,
+                    ?extra_new_seed_deps,
+                    "extra seed deps dropped to prevent infinite loop",
+                );
             }
 
             // check if we haven't missed any essential dependency
