@@ -146,6 +146,15 @@ impl<'a, En: Engine> WorkCache<'a, En> {
             .run_event_bare(ev.cmd, &ev.arg, base_st)
             .map_err(WorkCacheError::Engine)?;
 
+        #[cfg(feature = "tracing")]
+        event!(
+            Level::TRACE,
+            "from {:?} constructed expected state {:?} +cur> {:?}",
+            _base_tt,
+            base_st,
+            cur_st
+        );
+
         if cur_deps.is_empty() && base_st == &cur_st {
             // this is a no-op event, we can't handle it anyways.
             return Ok(None);
@@ -277,11 +286,13 @@ impl<'a, En: Engine> WorkCache<'a, En> {
                 } else {
                     let evfirst = engine
                         .run_event_bare(ev.cmd, &ev.arg, base_st)
-                        .and_then(|next_st| {
-                            engine.run_event_bare(conc_ev.cmd, &conc_ev.arg, &next_st)
-                        })
                         .map_err(WorkCacheError::Engine)?;
-                    let res = evfirst == cur_st;
+                    let evfirst_then = engine
+                        .run_event_bare(conc_ev.cmd, &conc_ev.arg, &evfirst)
+                        .map_err(WorkCacheError::Engine)?;
+                    // we need to make sure that this event does not make merging
+                    // later impossible because another event gets inapplicable.
+                    let res = evfirst != evfirst_then && evfirst_then == cur_st;
                     #[cfg(feature = "tracing")]
                     if !res {
                         event!(
@@ -405,7 +416,7 @@ impl<'a, En: Engine> WorkCache<'a, En> {
     {
         // TODO: make this more effective
 
-        let mut seed_deps: BTreeSet<_> = graph
+        let full_seed_deps: BTreeSet<_> = graph
             .calculate_dependencies(
                 Default::default(),
                 sts.iter()
@@ -415,14 +426,17 @@ impl<'a, En: Engine> WorkCache<'a, En> {
             .into_iter()
             .collect();
 
-        seed_deps = graph
-            .fold_state(seed_deps.into_iter().map(|h| (h, false)).collect(), false)?
+        let mut seed_deps: BTreeSet<_> = graph
+            .fold_state(full_seed_deps.iter().map(|&h| (h, false)).collect(), false)?
             .into_iter()
             .map(|(h, _)| h)
             .collect();
 
+        #[cfg(feature = "tracing")]
+        event!(Level::TRACE, ?full_seed_deps, ?seed_deps, "merge seeds");
+
         for i in sts {
-            if seed_deps.contains(&i) {
+            if full_seed_deps.contains(&i) {
                 continue;
             }
             let ev = graph.events[&i].clone();
@@ -738,9 +752,11 @@ mod tests {
                 xsv.push(x);
             }
 
+            #[cfg(feature = "tracing")]
+            event!(Level::TRACE, ?w, ?g, "checkpoint before merge");
             if let Err(e) = w.try_merge(&mut g, xs.clone()) {
                 #[cfg(feature = "tracing")]
-                event!(Level::TRACE, ?w, ?g, "state after try_merge",);
+                event!(Level::TRACE, ?w, ?g, "state after try_merge");
                 panic!("merge failed: {:?}", e);
             }
 
